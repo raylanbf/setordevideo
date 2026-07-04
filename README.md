@@ -54,7 +54,8 @@ setordevideo/
 │  ├─ popup.html
 │  └─ popup.js            # mostra a última coleção capturada
 ├─ docs/
-│  └─ canvas-api-extensao.md   # pesquisa de APIs e decisões de arquitetura
+│  ├─ canvas-api-extensao.md              # pesquisa de APIs e decisões de arquitetura
+│  └─ automacao-embed-studio-em-paginas.md # como incorporar vídeos do Studio em páginas (spec)
 └─ README.md
 ```
 
