@@ -22,8 +22,8 @@ módulos — então o tempo publicado é menor que o tempo do acervo.
 - **Soma a duração de todos os vídeos da coleção**, inclusive os que ainda não apareceram na
   grade: a listagem do Studio é paginada (20 por página) e a extensão percorre as restantes.
   Enquanto a soma não cobre tudo, o número aparece com **`+`**.
-- **Analisa os módulos do curso** e separa o acervo em três números: *publicado nos módulos*,
-  *sobrando na coleção* e *nas páginas mas fora da coleção*.
+- **Analisa os módulos do curso** e separa o acervo em três números: *usados nos módulos*,
+  *sem uso* e *nos módulos, de outra coleção*.
 - **Abre o Studio do curso** por um botão do painel, usando o link que já existe na navegação
   do curso — sem procurar no menu.
 
@@ -46,12 +46,17 @@ módulos — então o tempo publicado é menor que o tempo do acervo.
 4. O painel mostra o resumo:
 
 ```
-Na coleção do Studio        21 · 5h 31min
-Publicados nos módulos      18 · 4h 12min   ← o tempo que está no ar
-Sobrando na coleção          3 · 1h 19min
+Acervo da coleção        21 · 5h 31min
+Usados nos módulos       18 · 4h 12min   ← o tempo que está nas páginas
+Sem uso nos módulos       3 · 1h 19min
 ```
 
-Abrindo **Ver os 18 publicados**, cada vídeo traz o link do item onde ele aparece.
+Abrindo **Ver os 18 publicados**, cada vídeo traz o link do item onde aparece — e o
+título do vídeo abre a gravação no Studio, para você conferir de qual se trata.
+
+O resultado fica guardado na sessão: navegar pelo curso, abrir um vídeo ou uma página não
+apaga a análise. Ela só é refeita quando você clica em **Analisar módulos de novo**, e some
+quando o Chrome é fechado.
 
 ## Segurança / privacidade
 
@@ -72,9 +77,12 @@ Abrindo **Ver os 18 publicados**, cada vídeo traz o link do item onde ele apare
   conteúdo não é interpretado, guardado nem enviado.
 - O acesso ao domínio do Canvas é uma **permissão opcional**, pedida na primeira análise. Se você
   negar, tudo o mais continua funcionando.
-- **Nada vai para fora do navegador** e **nada é gravado em disco**. O inventário da coleção fica
-  em `chrome.storage.session` — memória do navegador, apagada quando o Chrome fecha — só para o
-  painel poder cruzar os dados depois que você sai da página do Studio.
+- **Nada vai para fora do navegador** e **nada é gravado em disco**. O inventário da coleção e o
+  resultado da análise ficam em `chrome.storage.session` — memória do navegador, apagada quando o
+  Chrome fecha — para o painel não perder os dados a cada navegação.
+- O link "assistir no Studio" de cada vídeo usa o mesmo proxy de launch que o Canvas já usa nos
+  embeds (`external_tools/retrieve`): quem assina a chamada é o Canvas, na hora da abertura.
+  Nenhum token é gerado ou guardado pela extensão.
 
 ## Se a duração aparecer com `+` (soma incompleta)
 
@@ -99,7 +107,7 @@ setordevideo/
 ├─ manifest.json          # MV3: painel lateral, content scripts, permissões
 ├─ icons/                 # ícones da extensão (16/32/48/128 px)
 ├─ src/
-│  ├─ background.js       # service worker: abre o painel e guarda o inventário na sessão
+│  ├─ background.js       # service worker: abre o painel, guarda acervo e análise na sessão
 │  ├─ net-hook.js         # lê a listagem do Studio: vídeos, durações, pagina tudo
 │  ├─ canvas-scan.js      # varre os módulos e cruza os embeds com o acervo
 │  ├─ format.js           # formata segundos como "12h 37min"
@@ -150,3 +158,7 @@ qualquer outra instância) e, como permissão opcional, `https://*.instructure.c
 - **Inserir o vídeo na página automaticamente**: a listagem já entrega `lti_launch_id`,
   `title` e `thumbnail_url` de todos os vídeos, e o molde do embed está mapeado.
   Ver `docs/automacao-embed-studio-em-paginas.md` (§3).
+
+> **"Usados" não é o mesmo que "publicado no Canvas".** A conta é sobre o vídeo estar dentro do
+> conteúdo do item — se o módulo está publicado ou não é outra coisa, mostrada apenas como marca
+> ao lado do item.

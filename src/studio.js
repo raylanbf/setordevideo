@@ -204,6 +204,7 @@
               collectionId: extractCollectionId() || key,
               canvasCourseId: ctx.canvasCourseId || null,
               canvasDomain: ctx.canvasDomain || null,
+              studioDomain: location.host,
               courseName: ctx.courseName || null,
               videos: s.videos,
               totalCount: s.count,
@@ -283,6 +284,8 @@
       courseName: ctx.courseName || null,
       canvasCourseId: ctx.canvasCourseId || null,
       canvasDomain: ctx.canvasDomain || null,
+      // Host do Studio: o painel monta com ele o link para abrir cada vídeo.
+      studioDomain: location.host,
     });
   });
 

@@ -9,7 +9,9 @@
 // e some quando o Chrome fecha. É o que permite manter a promessa de não gravar nada.
 
 const CHAVE = "sdv-inventario";
+const CHAVE_ANALISE = "sdv-analises";
 const MAX_COLECOES = 8; // lembra as últimas coleções visitadas na sessão
+const MAX_ANALISES = 6; // e as últimas análises de módulos, por curso
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true }).catch(() => {});
@@ -18,12 +20,31 @@ chrome.runtime.onStartup?.addListener(() => {
   chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true }).catch(() => {});
 });
 
-async function lerTudo() {
+async function lerChave(chave) {
   try {
-    const dados = await chrome.storage.session.get(CHAVE);
-    return dados[CHAVE] || {};
+    const dados = await chrome.storage.session.get(chave);
+    return dados[chave] || {};
   } catch {
     return {};
+  }
+}
+
+const lerTudo = () => lerChave(CHAVE);
+
+// Guarda o resultado da análise por curso, para o painel não perdê-lo a cada navegação —
+// varrer os módulos de novo só porque o usuário abriu uma página seria desperdício.
+async function guardarAnalise(dados) {
+  if (!dados || !dados.courseId) return;
+  const tudo = await lerChave(CHAVE_ANALISE);
+  tudo[String(dados.courseId)] = Object.assign({}, dados, { at: Date.now() });
+
+  const chaves = Object.keys(tudo).sort((a, b) => (tudo[b].at || 0) - (tudo[a].at || 0));
+  for (const k of chaves.slice(MAX_ANALISES)) delete tudo[k];
+
+  try {
+    await chrome.storage.session.set({ [CHAVE_ANALISE]: tudo });
+  } catch {
+    /* sem storage: a análise simplesmente não sobrevive à navegação */
   }
 }
 
@@ -34,6 +55,7 @@ async function guardarInventario(inv) {
     collectionId: inv.collectionId,
     canvasCourseId: inv.canvasCourseId || null,
     canvasDomain: inv.canvasDomain || null,
+    studioDomain: inv.studioDomain || null,
     courseName: inv.courseName || null,
     videos: inv.videos,
     totalCount: inv.totalCount ?? null,
@@ -75,6 +97,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === "sdv-inventory") {
     guardarInventario(msg.data).then(() => sendResponse({ ok: true }));
     return true; // resposta assíncrona
+  }
+
+  if (msg.type === "sdv-analysis") {
+    guardarAnalise(msg.data).then(() => sendResponse({ ok: true }));
+    return true;
+  }
+
+  if (msg.type === "sdv-get-analysis") {
+    lerChave(CHAVE_ANALISE).then((tudo) => {
+      sendResponse({ analise: (msg.courseId && tudo[String(msg.courseId)]) || null });
+    });
+    return true;
   }
 
   if (msg.type === "sdv-get-inventory") {

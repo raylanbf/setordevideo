@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Setor de Vídeo — Canvas Studio",
   "description": "Painel lateral do Canvas Studio: ID da coleção, duração total e quais vídeos estão nos módulos do curso.",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",

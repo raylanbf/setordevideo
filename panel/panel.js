@@ -43,6 +43,51 @@ const pedirInventario = (courseId, collectionId) =>
     )
   );
 
+const pedirAnalise = (courseId) =>
+  new Promise((r) =>
+    chrome.runtime.sendMessage({ type: "sdv-get-analysis", courseId }, (resp) => {
+      void chrome.runtime.lastError;
+      r((resp && resp.analise) || null);
+    })
+  );
+
+function guardarAnalise() {
+  if (!estado.analise || estado.analise.rodando || estado.analise.erro || !estado.courseId) return;
+  try {
+    chrome.runtime.sendMessage(
+      {
+        type: "sdv-analysis",
+        data: Object.assign({}, estado.analise, {
+          courseId: estado.courseId,
+          collectionId: acervo().collectionId,
+          studioDomain: estado.studioDomain,
+          canvasDomain: estado.dominio,
+        }),
+      },
+      () => void chrome.runtime.lastError
+    );
+  } catch {
+    /* ignora */
+  }
+}
+
+// Link para assistir ao vídeo. Usa o mesmo proxy de launch que o Canvas usa nos embeds
+// (docs/automacao-embed-studio-em-paginas.md §2.3): quem assina a chamada LTI é o Canvas,
+// no momento da abertura, então basta o media id — não precisa de token nem do id do tool.
+function linkDoVideo(v) {
+  const studio = estado.studioDomain || (estado.analise && estado.analise.studioDomain);
+  const canvas = estado.dominio || (estado.analise && estado.analise.canvasDomain);
+  const curso = estado.courseId;
+  if (!studio || !canvas || !curso || !v || !v.ltiLaunchId) return null;
+  const launch =
+    `https://${studio}/lti/launch?custom_arc_launch_type=bare_embed` +
+    `&custom_arc_media_id=${encodeURIComponent(v.ltiLaunchId)}&custom_arc_start_at=0`;
+  return (
+    `https://${canvas}/courses/${curso}/external_tools/retrieve` +
+    `?display=borderless&url=${encodeURIComponent(launch)}`
+  );
+}
+
 // O acervo pode vir de dois lugares. Com o Studio aberto na aba, a resposta ao vivo do
 // content script é a fonte melhor (mais recente e sem depender de gravação); fora dele,
 // vale o que ficou guardado na sessão.
@@ -186,7 +231,11 @@ function cartaoAcoes() {
   return `<div class="card acoes">
     <button class="acao" id="abrir-studio" ${temCurso ? "" : "disabled"}>Abrir o Studio deste curso</button>
     <button class="acao ${temInventario && temCurso ? "" : "secundaria"}" id="analisar"
-      ${temInventario && temCurso ? "" : "disabled"}>Analisar módulos do curso</button>
+      ${temInventario && temCurso ? "" : "disabled"}>${
+        estado.analise && estado.analise.resultado
+          ? "Analisar módulos de novo"
+          : "Analisar módulos do curso"
+      }</button>
     ${
       // Com o resultado na tela as explicações saem de cena, para sobrar espaço.
       estado.analise && !estado.analise.rodando
@@ -224,8 +273,14 @@ function listaVideos(videos, mostrarOnde) {
       const dur = sdvFormatDuration(v.duration);
       const onde =
         mostrarOnde && v.locais ? `<div class="onde">${ondeHtml(v.locais)}</div>` : "";
+      const link = linkDoVideo(v);
+      const titulo = esc(v.title || "(sem título)");
       return `<li>
-        <div class="vt">${esc(v.title || "(sem título)")}</div>
+        <div class="vt">${
+          link
+            ? `<a href="${esc(link)}" target="_blank" rel="noreferrer" title="Assistir no Studio">${titulo}</a>`
+            : titulo
+        }</div>
         <div class="vd">${dur ? esc(dur) : "duração desconhecida"}</div>
         ${onde}
       </li>`;
@@ -281,7 +336,14 @@ function cartaoAnalise() {
     </div>
     <p class="hint">"Usados" = o vídeo está dentro do conteúdo do item (página, tarefa, quiz ou
     discussão), esteja o módulo publicado ou não no Canvas.</p>
-    <p class="hint">${a.itensVarridos} itens de ${a.modulos} módulos lidos.${
+    <p class="hint">${
+      a.at
+        ? `Análise de ${new Date(a.at).toLocaleTimeString("pt-BR", {
+            hour: "2-digit",
+            minute: "2-digit",
+          })}${a.collectionId ? `, cruzada com a coleção ${esc(a.collectionId)}` : ""}. `
+        : ""
+    }${a.itensVarridos} itens de ${a.modulos} módulos lidos.${
       r.porVia && (r.porVia.link || r.porVia.id)
         ? ` Dos publicados, ${r.porVia.embed} por "Adicionar item"` +
           (r.porVia.link ? `, ${r.porVia.link} colados na página` : "") +
@@ -413,6 +475,7 @@ async function analisar() {
   } catch (e) {
     estado.analise = { erro: String((e && e.message) || e) };
   }
+  guardarAnalise(); // sobrevive à navegação: não se varre os módulos duas vezes
   desenhar();
 }
 
@@ -423,6 +486,7 @@ async function carregar() {
   estado.colecao = null;
   estado.dominio = null;
   estado.courseId = null;
+  estado.studioDomain = null;
 
   const url = (aba && aba.url) || "";
   const m = url.match(/^https:\/\/([^/]+)\/courses\/(\d+)/);
@@ -437,6 +501,7 @@ async function carregar() {
       estado.colecao = resp;
       if (!estado.dominio && resp.canvasDomain) estado.dominio = resp.canvasDomain;
       if (!estado.courseId && resp.canvasCourseId) estado.courseId = String(resp.canvasCourseId);
+      if (resp.studioDomain) estado.studioDomain = resp.studioDomain;
     }
   }
 
@@ -451,6 +516,16 @@ async function carregar() {
     if (!estado.courseId && estado.inventario.canvasCourseId) {
       estado.courseId = String(estado.inventario.canvasCourseId);
     }
+    if (!estado.studioDomain && estado.inventario.studioDomain) {
+      estado.studioDomain = estado.inventario.studioDomain;
+    }
+  }
+
+  // Recupera a análise já feita deste curso: trocar de página não pode obrigar a varrer
+  // os módulos de novo.
+  if (!estado.analise && estado.courseId) {
+    const guardada = await pedirAnalise(estado.courseId);
+    if (guardada) estado.analise = guardada;
   }
 
   desenhar();
