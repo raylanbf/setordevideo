@@ -17,3 +17,13 @@ function sdvFormatDuration(totalSeconds) {
   if (h > 0) return m > 0 ? `${h}h ${m}min` : `${h}h`;
   return `${m}min`;
 }
+
+// Segundos -> "1:24:35" / "16:08". Formato de relógio, para a planilha.
+function sdvFormatRelogio(totalSeconds) {
+  const sec = Math.max(0, Math.round(Number(totalSeconds) || 0));
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  const dois = (n) => String(n).padStart(2, "0");
+  return h > 0 ? `${h}:${dois(m)}:${dois(s)}` : `${m}:${dois(s)}`;
+}

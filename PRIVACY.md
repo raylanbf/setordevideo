@@ -49,6 +49,9 @@ Nenhuma informação é enviada para o desenvolvedor nem para terceiros.
 - **storage** — manter a lista de vídeos da coleção em memória de sessão, como descrito acima.
 - **clipboardWrite** — copiar o ID da coleção para a área de transferência quando o usuário
   clica no botão de copiar.
+- **downloads** — salvar, no computador do usuário, a planilha (.xlsx) gerada quando ele clica
+  em "Baixar planilha". O arquivo é montado no próprio navegador, com dados que já estão na
+  tela; nada é enviado para fora.
 - **Acesso a `instructuremedia.com`** — necessário para a extensão funcionar dentro das páginas
   do Canvas Studio e para ler a listagem de vídeos da coleção (incluindo as páginas seguintes
   da lista, para somar a duração total).

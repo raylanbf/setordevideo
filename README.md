@@ -58,6 +58,16 @@ O resultado fica guardado na sessão: navegar pelo curso, abrir um vídeo ou uma
 apaga a análise. Ela só é refeita quando você clica em **Analisar módulos de novo**, e some
 quando o Chrome é fechado.
 
+5. **Baixar planilha (.xlsx)** exporta o resultado em duas abas:
+
+| Aba | Colunas |
+|---|---|
+| **Vídeos alocados** | Vídeo, Duração, Minutos, Onde está (item), Módulo, Tipo do item, Como foi inserido, Item publicado, ID da mídia |
+| **Vídeos não alocados** | Vídeo, Duração, Minutos, ID da mídia |
+
+A coluna *Minutos* é numérica, então dá para somar e montar tabela dinâmica direto no Excel.
+Cada aba fecha com uma linha de TOTAL.
+
 ## Segurança / privacidade
 
 - A extensão **lê apenas o número da coleção na URL** do frame do Studio.
@@ -110,6 +120,7 @@ setordevideo/
 │  ├─ background.js       # service worker: abre o painel, guarda acervo e análise na sessão
 │  ├─ net-hook.js         # lê a listagem do Studio: vídeos, durações, pagina tudo
 │  ├─ canvas-scan.js      # varre os módulos e cruza os embeds com o acervo
+│  ├─ xlsx.js            # gera a planilha (.xlsx é um ZIP de XMLs; sem biblioteca)
 │  ├─ format.js           # formata segundos como "12h 37min"
 │  └─ studio.js           # detecta o collection_id na URL e injeta o botão
 ├─ panel/

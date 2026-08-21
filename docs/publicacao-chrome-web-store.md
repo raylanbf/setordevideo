@@ -36,13 +36,15 @@ O QUE ELA FAZ
 • Detecta automaticamente quando você está numa coleção do Canvas Studio e mostra o ID — clicou, copiou.
 • Soma a duração de TODOS os vídeos da coleção (percorrendo todas as páginas da lista) e mostra o total em horas e minutos.
 • Analisa os módulos do curso e informa quantos vídeos — e quantas horas — estão de fato publicados nas páginas, tarefas, quizzes e discussões, separando o que sobrou na coleção sem ser usado.
-• Mostra em qual item do curso cada vídeo aparece, com link direto.
+• Mostra em qual item do curso cada vídeo aparece, com link direto — e abre o vídeo no Studio para conferência.
+• Exporta tudo em planilha Excel (.xlsx), com uma aba de vídeos alocados e outra de não alocados.
 
 COMO USAR
 1. Entre num curso no Canvas e clique no ícone da extensão: o painel abre à direita.
 2. Clique em "Abrir o Studio deste curso" e deixe a biblioteca carregar.
 3. Volte ao curso e clique em "Analisar módulos do curso".
-4. O painel mostra quanto do acervo está publicado e o que sobrou.
+4. O painel mostra quanto do acervo está nos módulos e o que sobrou.
+5. Se quiser, baixe a planilha (.xlsx) com as duas listas.
 
 PRIVACIDADE
 • Funciona apenas nas páginas do Canvas Studio (instructuremedia.com).
@@ -72,7 +74,8 @@ Ideal para setores de produção de vídeo, equipes de EAD e administradores que
 
 **Screenshots sugeridos:**
 1. O botão "🎬 Coleção: … · N vídeos" aparecendo na página do Studio.
-2. O popup da extensão aberto, mostrando ID + vídeos + disciplina.
+2. O painel lateral aberto, mostrando ID + vídeos + duração total.
+3. O painel com o resultado da análise dos módulos (acervo x usados x sem uso).
 
 ---
 
@@ -87,7 +90,7 @@ Ajudar quem gerencia vídeos no Canvas Studio a dimensionar o acervo de vídeo d
 
 **activeTab**
 ```
-Quando o usuário clica no ícone da extensão, o popup consulta apenas a aba ativa para identificar qual coleção do Canvas Studio está aberta e exibir o ID. Se a aba estiver numa página de curso do Canvas fora do Studio, a mesma permissão é usada para localizar o link do Studio daquele curso e abri-lo. Nenhuma outra aba é acessada.
+Quando o usuário clica no ícone da extensão, o painel lateral consulta apenas a aba ativa para identificar qual coleção do Canvas Studio está aberta e exibir o ID. Se a aba estiver numa página de curso do Canvas fora do Studio, a mesma permissão é usada para localizar o link do Studio daquele curso e abri-lo. Nenhuma outra aba é acessada.
 ```
 
 **sidePanel**
@@ -103,6 +106,11 @@ Mantém em chrome.storage.session (memória do navegador, nunca em disco, descar
 **scripting**
 ```
 Quando o usuário clica no ícone da extensão fora do Canvas Studio, a extensão lê da página de curso aberta apenas o endereço do link "Studio" que o próprio Canvas exibe na navegação do curso, para abrir o Studio naquela aba. A leitura acontece somente nesse clique, somente na aba ativa (permissão activeTab), não altera a página e nada é armazenado.
+```
+
+**downloads**
+```
+Salva no computador do usuário a planilha (.xlsx) com o resultado da análise, quando ele clica em "Baixar planilha". O arquivo é montado inteiramente no navegador, a partir de dados que já estão na tela; nada é enviado para servidores.
 ```
 
 **clipboardWrite**

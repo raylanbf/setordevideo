@@ -373,6 +373,7 @@ function cartaoAnalise() {
              ${listaFora(r.fora)}</details>`
         : ""
     }
+    <button class="acao secundaria" id="baixar" style="margin-top:10px">Baixar planilha (.xlsx)</button>
     ${
       a.erros && a.erros.length
         ? `<details><summary>${a.erros.length} item(ns) não puderam ser lidos</summary>
@@ -405,6 +406,9 @@ function desenhar() {
 
   const analisar = document.getElementById("analisar");
   if (analisar) analisar.addEventListener("click", aoClicarAnalisar);
+
+  const baixar = document.getElementById("baixar");
+  if (baixar) baixar.addEventListener("click", baixarPlanilha);
 }
 
 // --- ações --------------------------------------------------------------------
@@ -477,6 +481,129 @@ async function analisar() {
   }
   guardarAnalise(); // sobrevive à navegação: não se varre os módulos duas vezes
   desenhar();
+}
+
+// --- exportação para Excel ----------------------------------------------------
+const unicos = (lista) => Array.from(new Set(lista.filter(Boolean)));
+const minutos = (seg) => Math.round(((Number(seg) || 0) / 60) * 10) / 10;
+
+const ROTULO_VIA = { embed: "Adicionar item", link: "Colado na página", id: "Outro formato" };
+
+function situacaoPublicado(locais) {
+  const estados = (locais || []).map((l) => l.publicado !== false);
+  if (!estados.length) return "";
+  if (estados.every(Boolean)) return "Sim";
+  if (estados.every((e) => !e)) return "Não";
+  return "Parcial";
+}
+
+function abasDaPlanilha(r) {
+  const alocados = r.usados.map((v) => [
+    v.title || "(sem título)",
+    sdvFormatRelogio(v.duration),
+    minutos(v.duration),
+    unicos((v.locais || []).map((l) => l.titulo || l.tipo)).join(" | "),
+    unicos((v.locais || []).map((l) => l.modulo)).join(" | "),
+    unicos((v.locais || []).map((l) => l.tipo)).join(" | "),
+    unicos((v.locais || []).map((l) => ROTULO_VIA[l.via] || l.via)).join(" | "),
+    situacaoPublicado(v.locais),
+    v.mediaId || "",
+  ]);
+  alocados.push([
+    `TOTAL — ${r.usados.length} vídeo${r.usados.length === 1 ? "" : "s"}`,
+    sdvFormatRelogio(r.segUsados),
+    minutos(r.segUsados),
+    "", "", "", "", "", "",
+  ]);
+
+  const naoAlocados = r.naoUsados.map((v) => [
+    v.title || "(sem título)",
+    sdvFormatRelogio(v.duration),
+    minutos(v.duration),
+    v.mediaId || "",
+  ]);
+  naoAlocados.push([
+    `TOTAL — ${r.naoUsados.length} vídeo${r.naoUsados.length === 1 ? "" : "s"}`,
+    sdvFormatRelogio(r.segNaoUsados),
+    minutos(r.segNaoUsados),
+    "",
+  ]);
+
+  return [
+    {
+      nome: "Vídeos alocados",
+      negritoUltima: true,
+      colunas: [
+        { titulo: "Vídeo", largura: 46 },
+        { titulo: "Duração", largura: 11 },
+        { titulo: "Minutos", largura: 10 },
+        { titulo: "Onde está (item)", largura: 40 },
+        { titulo: "Módulo", largura: 30 },
+        { titulo: "Tipo do item", largura: 14 },
+        { titulo: "Como foi inserido", largura: 20 },
+        { titulo: "Item publicado", largura: 14 },
+        { titulo: "ID da mídia", largura: 14 },
+      ],
+      linhas: alocados,
+    },
+    {
+      nome: "Vídeos não alocados",
+      negritoUltima: true,
+      colunas: [
+        { titulo: "Vídeo", largura: 46 },
+        { titulo: "Duração", largura: 11 },
+        { titulo: "Minutos", largura: 10 },
+        { titulo: "ID da mídia", largura: 14 },
+      ],
+      linhas: naoAlocados,
+    },
+  ];
+}
+
+function nomeDoArquivo() {
+  const curso =
+    (estado.colecao && estado.colecao.courseName) ||
+    (estado.inventario && estado.inventario.courseName) ||
+    estado.courseId ||
+    "curso";
+  const limpo = String(curso)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^A-Za-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40)
+    .toLowerCase();
+  const hoje = new Date().toISOString().slice(0, 10);
+  return `videos-${limpo || "curso"}-${hoje}.xlsx`;
+}
+
+async function baixarPlanilha() {
+  const botao = document.getElementById("baixar");
+  const r = estado.analise && estado.analise.resultado;
+  if (!r) return;
+
+  let url = null;
+  try {
+    url = URL.createObjectURL(sdvGerarXlsx(abasDaPlanilha(r)));
+    const filename = nomeDoArquivo();
+    if (chrome.downloads && chrome.downloads.download) {
+      await chrome.downloads.download({ url, filename });
+    } else {
+      // Sem a permissão de downloads: âncora comum resolve numa página de extensão.
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+    }
+    if (botao) {
+      botao.textContent = "✅ Planilha baixada";
+      setTimeout(() => (botao.textContent = "Baixar planilha (.xlsx)"), 2500);
+    }
+  } catch (e) {
+    if (botao) botao.textContent = "Falha ao gerar a planilha";
+  } finally {
+    if (url) setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
 }
 
 // --- carga --------------------------------------------------------------------
