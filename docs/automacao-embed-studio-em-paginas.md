@@ -6,8 +6,9 @@
 > outra extensão (outro projeto) que já **cria páginas no Canvas a partir de conteúdo, mas hoje
 > sem os vídeos** (que entram na mão).
 >
-> Nada é implementado aqui. Esta extensão (`setordevideo`) permanece como está — ela só **lê** o
-> `collection_id` e conta vídeos. Este doc é o plano para o passo seguinte.
+> O embed em si não está implementado aqui — este doc é o plano para esse passo. O que já saiu
+> do papel foi a **leitura da listagem `tiles`** (§4.1): a extensão hoje lê o `collection_id`,
+> conta os vídeos e **soma a duração da coleção inteira, percorrendo todas as páginas**.
 
 Data: 2026-07-02 (atualizado 2026-07-03, com resposta real do endpoint `tiles`) · Instância de
 referência: **PUC Minas** (`pucminas.instructuremedia.com` / `pucminas.instructure.com`).
@@ -143,7 +144,7 @@ Três níveis, do mais fácil (o que já usamos) ao que depende de terceiros:
 
 ### 4.1. Interceptar a sessão do Studio (SEM chave de API) — **o caminho recomendado**
 O `net-hook` já escuta as chamadas que a SPA do Studio faz — ver
-[net-hook.js:45-60](../src/net-hook.js#L45-L60). Quando você abre uma coleção, a SPA chama o
+[net-hook.js:49-83](../src/net-hook.js#L49-L83). Quando você abre uma coleção, a SPA chama o
 endpoint **`tiles`** (paginado), que devolve a lista de vídeos daquela coleção num JSON. Tudo que
 aparece na grade do Studio está nesse JSON.
 
@@ -179,9 +180,12 @@ Para pegar todos os vídeos: iterar `page = 1 … meta.last_page` (20 por págin
 `data.media.author.email`, `data.media.pandata_tokens.{auth,resource}` e o
 `data.pandata_tokens.*` (JWTs de sessão). Nada disso é necessário para o embed.
 
-**Limite do método:** só enxergamos o que a SPA de fato baixa. Como é paginado (20/página),
-para coleções grandes é preciso ou percorrer as páginas na própria SPA, ou (melhor) **refazer a
-chamada `tiles` variando `page`** reusando a sessão — leitura simples, sem CSRF.
+**Limite do método — resolvido:** a interceptação pura só enxerga o que a SPA de fato baixa
+(20/página). Desde a v0.5.0 o `net-hook` **refaz a chamada `tiles` variando `page`** reusando a
+sessão (leitura simples, sem CSRF) até `meta.last_page`, deduplicando por `media.id` — ver
+[net-hook.js:130-156](../src/net-hook.js#L130-L156). É assim que a duração total sai correta em
+coleções grandes; o mesmo laço já entrega `lti_launch_id` e `thumbnail_url` de **todos** os
+vídeos, que é o que o embed (§3) precisa. Teto de segurança: 50 páginas.
 
 ### 4.2. Studio Public API (com chave) — hoje indisponível
 `GET /api/public/v1/collections/{id}/media` e afins dão acesso oficial e completo (listar mídias,

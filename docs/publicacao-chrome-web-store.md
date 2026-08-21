@@ -21,29 +21,32 @@ Setor de Vídeo — Canvas Studio
 
 ### Descrição curta (summary) — máx. 132 caracteres  *(já no manifest)*
 ```
-Mostra e copia o ID da coleção do Canvas Studio e a quantidade de vídeos, direto da página.
+Painel lateral do Canvas Studio: ID da coleção, duração total e quais vídeos estão nos módulos do curso.
 ```
 
 ### Descrição detalhada
 ```
-Descubra e copie o ID de uma coleção do Canvas Studio em um clique — sem precisar abrir o código-fonte da página.
+Saiba quantas horas de vídeo o seu curso tem — e quanto disso está realmente publicado nas páginas.
 
-Para quem gerencia vídeos no Canvas Studio, encontrar o ID de uma coleção costuma ser um processo manual e demorado: abrir o código-fonte do frame e garimpar o número no meio do HTML. Esta extensão automatiza isso.
+Para quem gerencia vídeos no Canvas Studio, duas tarefas costumam ser manuais e demoradas: encontrar o ID de uma coleção (abrindo o código-fonte do frame e garimpando o número no HTML) e conferir, vídeo por vídeo, o que já foi publicado nos módulos do curso. Esta extensão automatiza as duas, num painel lateral.
 
 O QUE ELA FAZ
-• Detecta automaticamente quando você está numa coleção do Canvas Studio.
-• Mostra um botão com o ID da coleção — clicou, copiou.
-• Exibe a quantidade de vídeos da coleção.
-• No ícone da extensão, mostra também a disciplina e o ID do curso no Canvas correspondente.
+• Painel lateral que abre ao lado da página, sem tapar o conteúdo do curso.
+• Abre o Canvas Studio do curso por um botão, a partir de qualquer página daquele curso.
+• Detecta automaticamente quando você está numa coleção do Canvas Studio e mostra o ID — clicou, copiou.
+• Soma a duração de TODOS os vídeos da coleção (percorrendo todas as páginas da lista) e mostra o total em horas e minutos.
+• Analisa os módulos do curso e informa quantos vídeos — e quantas horas — estão de fato publicados nas páginas, tarefas, quizzes e discussões, separando o que sobrou na coleção sem ser usado.
+• Mostra em qual item do curso cada vídeo aparece, com link direto.
 
 COMO USAR
-1. Entre num curso no Canvas e abra o Studio pela navegação do curso.
-2. O botão com o ID da coleção aparece na tela.
-3. Clique para copiar. Pronto.
+1. Entre num curso no Canvas e clique no ícone da extensão: o painel abre à direita.
+2. Clique em "Abrir o Studio deste curso" e deixe a biblioteca carregar.
+3. Volte ao curso e clique em "Analisar módulos do curso".
+4. O painel mostra quanto do acervo está publicado e o que sobrou.
 
 PRIVACIDADE
 • Funciona apenas nas páginas do Canvas Studio (instructuremedia.com).
-• Não coleta, não armazena e não envia nenhum dado para fora do seu navegador.
+• Não coleta, não armazena e não envia nenhum dado para fora do seu navegador — as únicas consultas feitas são ao próprio Canvas Studio, para ler a lista de vídeos da coleção.
 • Usa a sua própria sessão já autenticada — não pede login, token nem chave de API.
 
 Ideal para setores de produção de vídeo, equipes de EAD e administradores que trabalham com o Canvas Studio.
@@ -77,14 +80,29 @@ Ideal para setores de produção de vídeo, equipes de EAD e administradores que
 
 ### Propósito único (single purpose)
 ```
-Ajudar quem gerencia vídeos no Canvas Studio a obter rapidamente o ID de uma coleção (e a quantidade de vídeos) diretamente da página, copiando-o com um clique, sem precisar inspecionar o código-fonte.
+Ajudar quem gerencia vídeos no Canvas Studio a dimensionar o acervo de vídeo de um curso: obter o ID da coleção, a quantidade de vídeos e a duração total, e comparar esse acervo com os vídeos efetivamente incorporados nos módulos do curso, para saber quanto tempo de vídeo está publicado e o que sobrou sem uso.
 ```
 
 ### Justificativa das permissões
 
 **activeTab**
 ```
-Quando o usuário clica no ícone da extensão, o popup consulta apenas a aba ativa para identificar qual coleção do Canvas Studio está aberta e exibir o ID. Nenhuma outra aba é acessada.
+Quando o usuário clica no ícone da extensão, o popup consulta apenas a aba ativa para identificar qual coleção do Canvas Studio está aberta e exibir o ID. Se a aba estiver numa página de curso do Canvas fora do Studio, a mesma permissão é usada para localizar o link do Studio daquele curso e abri-lo. Nenhuma outra aba é acessada.
+```
+
+**sidePanel**
+```
+Exibe o painel lateral, que é a interface principal da extensão: mostra os dados da coleção do Canvas Studio e o resultado da análise dos módulos ao lado da página do curso.
+```
+
+**storage**
+```
+Mantém em chrome.storage.session (memória do navegador, nunca em disco, descartada ao fechar o Chrome) a lista de vídeos da coleção — título, duração e identificador. É o que permite ao painel comparar a coleção com os módulos depois que o usuário sai da página do Studio. Nada é gravado em disco nem enviado a lugar nenhum.
+```
+
+**scripting**
+```
+Quando o usuário clica no ícone da extensão fora do Canvas Studio, a extensão lê da página de curso aberta apenas o endereço do link "Studio" que o próprio Canvas exibe na navegação do curso, para abrir o Studio naquela aba. A leitura acontece somente nesse clique, somente na aba ativa (permissão activeTab), não altera a página e nada é armazenado.
 ```
 
 **clipboardWrite**
@@ -94,7 +112,12 @@ Permite copiar o ID da coleção para a área de transferência quando o usuári
 
 **Acesso ao site (host permission: https://*.instructuremedia.com/*)**
 ```
-A extensão é executada somente nas páginas do Canvas Studio (instructuremedia.com) para: (1) ler o ID da coleção que já está na URL da página e exibir um botão para copiá-lo; e (2) ler a quantidade de vídeos da resposta que o próprio Studio já carrega. Nenhum dado é enviado para fora do navegador e nenhum outro site é acessado.
+A extensão é executada somente nas páginas do Canvas Studio (instructuremedia.com) para: (1) ler o ID da coleção que já está na URL da página e exibir um botão para copiá-lo; (2) ler a quantidade de vídeos e a duração de cada vídeo na listagem que o próprio Studio já carrega; e (3) como essa listagem é paginada (20 por página), repetir a mesma consulta de leitura (GET) ao próprio Studio para as páginas seguintes, de modo que a duração exibida seja a da coleção inteira. Todas as requisições são somente leitura, vão para o próprio Canvas Studio e usam a sessão que o usuário já tem. Nenhum dado é enviado para fora do navegador e nenhum outro site é acessado.
+```
+
+**Acesso opcional ao site do Canvas (optional host permission: https://*.instructure.com/*)**
+```
+Solicitado apenas quando o usuário clica em "Analisar módulos do curso". Com a sessão do próprio usuário, a extensão lê a lista de módulos do curso e o conteúdo dos itens que podem conter vídeo (páginas, tarefas, quizzes e discussões) para localizar os vídeos do Canvas Studio incorporados. A busca é apenas pelos identificadores dos vídeos do Canvas Studio — o parâmetro custom_arc_media_id do código de incorporação e o identificador da mídia presente nas URLs do Studio, para reconhecer o vídeo tanto quando ele é inserido pelo menu quanto quando é colado na página. Nenhuma outra informação do conteúdo é interpretada, exibida, armazenada ou enviada; nenhuma página é criada, alterada ou apagada. Se o usuário negar a permissão, o restante da extensão continua funcionando normalmente.
 ```
 
 ### Uso de código remoto (remote code)

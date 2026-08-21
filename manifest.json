@@ -1,16 +1,23 @@
 {
   "manifest_version": 3,
   "name": "Setor de Vídeo — Canvas Studio",
-  "description": "Mostra e copia o ID da coleção do Canvas Studio e a quantidade de vídeos, direto da página.",
-  "version": "0.4.0",
+  "description": "Painel lateral do Canvas Studio: ID da coleção, duração total e quais vídeos estão nos módulos do curso.",
+  "version": "0.9.0",
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "permissions": ["activeTab", "clipboardWrite"],
+  "permissions": ["activeTab", "clipboardWrite", "scripting", "sidePanel", "storage"],
   "host_permissions": ["https://*.instructuremedia.com/*"],
+  "optional_host_permissions": ["https://*.instructure.com/*"],
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "side_panel": {
+    "default_path": "panel/panel.html"
+  },
   "content_scripts": [
     {
       "matches": ["https://*.instructuremedia.com/*"],
@@ -23,11 +30,10 @@
       "matches": ["https://*.instructuremedia.com/*"],
       "all_frames": true,
       "run_at": "document_idle",
-      "js": ["src/studio.js"]
+      "js": ["src/format.js", "src/studio.js"]
     }
   ],
   "action": {
-    "default_popup": "popup/popup.html",
     "default_title": "Setor de Vídeo — Studio",
     "default_icon": {
       "16": "icons/icon16.png",

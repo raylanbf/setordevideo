@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Setor de Vídeo — Studio</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f6f7f9;
+        --card: #ffffff;
+        --texto: #1c1c1c;
+        --fraco: #6b7280;
+        --linha: #e5e7eb;
+        --marca: #1d3f72;
+        --marca-clara: #27538f;
+        --ok: #1b7f4b;
+        --alerta: #9a6700;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #1b1d21;
+          --card: #24272c;
+          --texto: #e8eaed;
+          --fraco: #9aa0a6;
+          --linha: #3a3e45;
+          --marca: #7ea6e0;
+          --marca-clara: #9dbdec;
+          --ok: #6bcf95;
+          --alerta: #e0b341;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font: 13px/1.5 system-ui, "Segoe UI", sans-serif;
+        color: var(--texto);
+        background: var(--bg);
+      }
+      header {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        background: var(--marca);
+        color: #fff;
+        padding: 10px 14px;
+        font-weight: 700;
+        font-size: 13px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+      }
+      @media (prefers-color-scheme: dark) {
+        header { background: #2b2f36; color: var(--texto); }
+      }
+      header button {
+        background: rgba(255, 255, 255, .18);
+        color: inherit;
+        border: none;
+        border-radius: 6px;
+        padding: 4px 8px;
+        font-size: 11px;
+        cursor: pointer;
+      }
+      main { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+
+      .card {
+        background: var(--card);
+        border: 1px solid var(--linha);
+        border-radius: 10px;
+        padding: 12px;
+      }
+      .card h2 {
+        margin: 0 0 8px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: .5px;
+        color: var(--fraco);
+        font-weight: 700;
+      }
+      .field { margin-bottom: 8px; }
+      .field:last-child { margin-bottom: 0; }
+      .label { font-size: 10px; text-transform: uppercase; letter-spacing: .4px; color: var(--fraco); }
+      .value { font-size: 14px; font-weight: 600; word-break: break-word; }
+      .id { font-size: 20px; color: var(--marca); }
+      .dur { font-size: 17px; color: var(--marca); }
+
+      button.acao {
+        width: 100%;
+        padding: 9px 10px;
+        border: none;
+        border-radius: 8px;
+        background: var(--marca);
+        color: #fff;
+        font-weight: 600;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      @media (prefers-color-scheme: dark) {
+        button.acao { background: var(--marca); color: #12151a; }
+      }
+      button.acao:hover:not(:disabled) { background: var(--marca-clara); }
+      button.acao:disabled { opacity: .55; cursor: default; }
+      button.secundaria {
+        background: transparent;
+        color: var(--marca);
+        border: 1px solid var(--linha);
+      }
+      button.secundaria:hover:not(:disabled) { background: rgba(125, 125, 125, .12); }
+      .acoes { display: flex; flex-direction: column; gap: 8px; }
+
+      .resumo { display: flex; flex-direction: column; gap: 6px; }
+      .linha-resumo {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 8px;
+        padding: 6px 0;
+        border-bottom: 1px solid var(--linha);
+      }
+      .linha-resumo:last-child { border-bottom: none; }
+      .linha-resumo .rot { color: var(--fraco); font-size: 12px; }
+      .linha-resumo .num { font-weight: 700; font-size: 14px; white-space: nowrap; }
+      .destaque .num { color: var(--ok); font-size: 16px; }
+      .sobra .num { color: var(--alerta); }
+
+      /* listas de vídeos dentro dos cartões */
+      details:not(.card) { border-top: 1px solid var(--linha); padding-top: 8px; margin-top: 8px; }
+      details:not(.card) > summary {
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--marca);
+        list-style: none;
+      }
+      details:not(.card) > summary::-webkit-details-marker { display: none; }
+      details:not(.card) > summary::before { content: "▸ "; }
+      details:not(.card)[open] > summary::before { content: "▾ "; }
+
+      /* o cartão da coleção: recolhe sozinho quando a análise ocupa a tela */
+      details.card > summary {
+        cursor: pointer;
+        list-style: none;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+      }
+      details.card > summary::-webkit-details-marker { display: none; }
+      details.card > summary::after { content: "▾"; color: var(--fraco); flex: none; }
+      details.card[open] > summary::after { content: "▴"; }
+      details.card[open] > summary {
+        margin-bottom: 10px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--linha);
+      }
+      details.card .cid { color: var(--marca); font-weight: 700; }
+
+      ul.videos { list-style: none; margin: 8px 0 0; padding: 0; }
+      ul.videos li { padding: 6px 0; border-bottom: 1px solid var(--linha); }
+      ul.videos li:last-child { border-bottom: none; }
+      .vt { font-weight: 600; font-size: 12px; }
+      .vd { color: var(--fraco); font-size: 11px; }
+      .onde { color: var(--fraco); font-size: 11px; margin-top: 2px; }
+      .onde .sobra { color: var(--alerta); }
+      .onde a { color: var(--marca); text-decoration: none; }
+      .onde a:hover { text-decoration: underline; }
+
+      .msg { color: var(--fraco); }
+      .erro { color: var(--alerta); font-size: 12px; }
+      .hint { font-size: 11px; color: var(--fraco); margin: 6px 0 0; }
+      progress { width: 100%; height: 6px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <span>Setor de Vídeo — Studio</span>
+      <button id="recarregar" title="Atualizar">↻</button>
+    </header>
+    <main id="content"></main>
+    <script src="../src/format.js"></script>
+    <script src="../src/canvas-scan.js"></script>
+    <script src="panel.js"></script>
+  </body>
+</html>

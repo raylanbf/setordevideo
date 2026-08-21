@@ -1,8 +1,9 @@
 // Setor de Vídeo — Canvas Studio
 // Content script (mundo isolado) injetado no frame do Studio (*.instructuremedia.com).
-// Lê o collection_id da URL do frame, mostra um botão para copiá-lo e exibe a
-// quantidade de vídeos recebida do net-hook. Também responde ao popup, em tempo real,
-// com a coleção atual desta aba (o popup não guarda nada — só mostra o estado de agora).
+// Lê o collection_id da URL do frame, mostra um botão para copiá-lo e exibe a quantidade
+// de vídeos e a DURAÇÃO TOTAL da coleção, recebidas do net-hook. Também responde ao popup,
+// em tempo real, com a coleção atual desta aba (o popup não guarda nada — só mostra agora).
+// A formatação de duração vem de src/format.js (sdvFormatDuration), carregado antes deste.
 (() => {
   "use strict";
 
@@ -16,9 +17,17 @@
     /\/courses\/(\d+)\/collections/,
   ];
 
-  // Contagem de vídeos da coleção atual (preenchida pelo net-hook).
-  let lastCount = null;
-  let lastExact = false;
+  // Estatísticas por coleção (preenchidas pelo net-hook): contagem + soma das durações.
+  // Guardamos por id porque o net-hook acumula por coleção; `latestKey` é o fallback para
+  // instâncias em que o id da URL do frame não é o mesmo de `data.collection.id`.
+  const statsByCollection = new Map();
+  let latestKey = null;
+  let renderedId = null;
+
+  function resetStats() {
+    statsByCollection.clear();
+    latestKey = null;
+  }
 
   function extractCollectionId() {
     for (const re of URL_PATTERNS) {
@@ -28,10 +37,26 @@
     return null;
   }
 
+  function currentStats() {
+    const id = extractCollectionId();
+    if (id && statsByCollection.has(id)) return statsByCollection.get(id);
+    return latestKey != null ? statsByCollection.get(latestKey) || null : null;
+  }
+
   function labelFor(id) {
-    if (lastCount == null) return `🎬 Coleção: ${id}`;
-    const n = lastExact ? `${lastCount}` : `${lastCount}+`;
-    return `🎬 Coleção: ${id} · ${n} vídeo${lastCount === 1 ? "" : "s"}`;
+    const s = currentStats();
+    if (!s) return `🎬 Coleção: ${id}`;
+
+    const parts = [];
+    if (typeof s.count === "number") {
+      const n = s.exact ? `${s.count}` : `${s.count}+`;
+      parts.push(`${n} vídeo${s.count === 1 ? "" : "s"}`);
+    }
+    const dur = sdvFormatDuration(s.durationSec);
+    // "+" enquanto ainda não vimos todos os vídeos (paginação em andamento ou incompleta).
+    if (dur) parts.push(s.complete ? dur : `${dur}+`);
+
+    return parts.length ? `🎬 Coleção: ${id} · ${parts.join(" · ")}` : `🎬 Coleção: ${id}`;
   }
 
   // base64url -> string UTF-8 (para ler o payload do JWT em memória).
@@ -118,13 +143,33 @@
     const id = btn.dataset.collectionId;
     if (!id) return;
     const ok = await copyText(id);
+    // `busy` segura o texto de confirmação: nem o render nem a chegada de novas
+    // páginas apagam o "Copiado!" antes da hora.
+    btn.dataset.busy = "1";
     btn.textContent = ok ? "✅ Copiado!" : `⚠️ Copie: ${id}`;
     clearTimeout(resetTimer);
-    resetTimer = setTimeout(() => (btn.textContent = labelFor(id)), 1600);
+    resetTimer = setTimeout(() => {
+      delete btn.dataset.busy;
+      btn.textContent = labelFor(id);
+    }, 1600);
+  }
+
+  function paintButton() {
+    const btn = document.getElementById(BTN_ID);
+    const id = btn && btn.dataset.collectionId;
+    if (!btn || !id || btn.dataset.busy) return;
+    const label = labelFor(id);
+    if (btn.textContent !== label) btn.textContent = label;
   }
 
   function render() {
     const id = extractCollectionId();
+
+    if (id !== renderedId) {
+      resetStats(); // trocou de coleção: zera contagem e duração da anterior
+      renderedId = id;
+    }
+
     let btn = document.getElementById(BTN_ID);
 
     if (!id) {
@@ -132,40 +177,88 @@
       return;
     }
 
-    const isNewCollection = !btn || btn.dataset.collectionId !== id;
-
     if (!btn) {
+      // Recria o botão caso a SPA tenha reescrito o body sem trocar de rota.
       btn = buildButton();
       (document.body || document.documentElement).appendChild(btn);
     }
-
-    if (isNewCollection) {
-      lastCount = null; // zera a contagem da coleção anterior
-      lastExact = false;
-      btn.dataset.collectionId = id;
-    }
-    btn.textContent = labelFor(id);
+    btn.dataset.collectionId = id;
+    paintButton();
   }
 
-  // Recebe a contagem de vídeos do net-hook (mesmo frame, mundo principal).
+  // Manda o inventário (vídeos + durações) para o service worker, que o guarda em
+  // chrome.storage.session — assim o painel lateral consegue cruzar a coleção com os
+  // módulos mesmo depois que o usuário sair da página do Studio.
+  let envioAgendado = null;
+  function enviarInventario(key) {
+    clearTimeout(envioAgendado);
+    envioAgendado = setTimeout(() => {
+      const s = statsByCollection.get(key);
+      if (!s || !s.videos || !s.videos.length) return;
+      const ctx = extractCanvasContext() || {};
+      try {
+        chrome.runtime?.sendMessage(
+          {
+            type: "sdv-inventory",
+            data: {
+              collectionId: extractCollectionId() || key,
+              canvasCourseId: ctx.canvasCourseId || null,
+              canvasDomain: ctx.canvasDomain || null,
+              courseName: ctx.courseName || null,
+              videos: s.videos,
+              totalCount: s.count,
+              complete: s.complete,
+            },
+          },
+          () => void chrome.runtime.lastError // service worker dormindo: sem problema
+        );
+      } catch {
+        /* contexto da extensão invalidado (recarregou a extensão): ignora */
+      }
+    }, 400); // junta as atualizações de várias páginas num envio só
+  }
+
+  // Recebe do net-hook (mesmo frame, mundo principal) a contagem e a soma de durações.
   window.addEventListener("message", (event) => {
     if (event.source !== window) return;
     const d = event.data;
-    if (!d || d.__sdv !== true || d.type !== "media-count") return;
-    if (typeof d.count !== "number") return;
+    if (!d || d.__sdv !== true) return;
 
-    // mantém o maior total exato visto; aproximado só preenche se não houver nada.
-    if (d.exact) {
-      lastCount = d.count;
-      lastExact = true;
-    } else if (lastCount == null) {
-      lastCount = d.count;
-      lastExact = false;
+    if (d.type === "collection-stats") {
+      const key = d.collectionId || "unknown";
+      statsByCollection.set(key, {
+        count: typeof d.count === "number" ? d.count : null,
+        exact: !!d.exact,
+        durationSec: typeof d.durationSec === "number" ? d.durationSec : 0,
+        durationItems: typeof d.durationItems === "number" ? d.durationItems : 0,
+        videosSeen: typeof d.videosSeen === "number" ? d.videosSeen : 0,
+        complete: !!d.complete,
+        videos: Array.isArray(d.videos) ? d.videos : [],
+      });
+      latestKey = key;
+      paintButton();
+      enviarInventario(key);
+      return;
     }
 
-    const btn = document.getElementById(BTN_ID);
-    const id = btn?.dataset.collectionId;
-    if (btn && id) btn.textContent = labelFor(id);
+    // Fallback de instâncias sem o endpoint `tiles`: só a contagem, e nunca por cima
+    // de dados reais de duração já obtidos.
+    if (d.type === "media-count" && typeof d.count === "number") {
+      const cur = currentStats();
+      if (cur && cur.durationSec > 0) return;
+      const prev = statsByCollection.get("unknown");
+      if (prev && prev.exact && !d.exact) return;
+      statsByCollection.set("unknown", {
+        count: d.count,
+        exact: !!d.exact,
+        durationSec: 0,
+        durationItems: 0,
+        videosSeen: 0,
+        complete: false,
+      });
+      if (latestKey == null) latestKey = "unknown";
+      paintButton();
+    }
   });
 
   // O popup pergunta, ao abrir, qual a coleção desta aba AGORA.
@@ -176,10 +269,17 @@
     const id = extractCollectionId();
     if (!id) return; // este frame não tem coleção: não responde
     const ctx = extractCanvasContext() || {};
+    const s = currentStats();
     sendResponse({
       id,
-      videoCount: lastCount,
-      videoCountExact: lastExact,
+      videoCount: s ? s.count : null,
+      videoCountExact: s ? s.exact : false,
+      durationSec: s ? s.durationSec : 0,
+      durationComplete: s ? s.complete : false,
+      videosSeen: s ? s.videosSeen : 0,
+      // O acervo vai junto: com o Studio aberto o painel não precisa esperar o
+      // service worker gravar nada para poder analisar os módulos.
+      videos: s && Array.isArray(s.videos) ? s.videos : [],
       courseName: ctx.courseName || null,
       canvasCourseId: ctx.canvasCourseId || null,
       canvasDomain: ctx.canvasDomain || null,
@@ -187,17 +287,11 @@
   });
 
   // A SPA do Studio troca de rota sem recarregar a página.
-  // popstate cobre voltar/avançar; o polling leve cobre pushState/replaceState.
+  // popstate cobre voltar/avançar; o polling leve cobre pushState/replaceState e
+  // também repõe o botão se a SPA reescrever a página.
   function watchNavigation() {
-    let last = location.href;
-    const check = () => {
-      if (location.href !== last) {
-        last = location.href;
-        render();
-      }
-    };
-    window.addEventListener("popstate", check);
-    setInterval(check, 700);
+    window.addEventListener("popstate", render);
+    setInterval(render, 700);
   }
 
   function start() {
