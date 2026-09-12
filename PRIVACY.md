@@ -26,6 +26,15 @@ Nenhuma informação é enviada para o desenvolvedor nem para terceiros.
   identificador da mídia presente nas URLs do Studio, usados para reconhecer o vídeo tanto quando
   ele é inserido pelo menu quanto quando é colado na página. Nenhuma outra informação do conteúdo
   é interpretada, exibida, guardada ou enviada.
+- Na função **"Baixar transcrição"** (botão 📄 de cada vídeo, ou o botão de um módulo), a
+  extensão consulta ao Studio quais legendas aquele vídeo tem e baixa o arquivo — o mesmo que o
+  player entrega em ⋮ → "Baixar histórico" —, convertendo-o em texto. O download é **sob
+  demanda**: acontece só quando o usuário clica, e o texto vai direto para o arquivo salvo,
+  **sem ser guardado** pela extensão.
+- Essas duas leituras (`GET`) são feitas no próprio servidor do Studio e com a **sessão do
+  usuário**. A API do Studio autentica por cabeçalho, e por isso quem faz a chamada é o script
+  que já roda **dentro da aba do Studio**, onde esses cabeçalhos existem: eles **nunca são
+  gravados** nem enviados a outra parte da extensão. Nenhuma chave de API é usada ou exigida.
 - Nenhuma página é aberta, alterada, criada ou apagada. Todas as operações são de leitura.
 - Toda a operação acontece **localmente, no navegador** do usuário. Nenhuma informação é enviada
   ao desenvolvedor, a servidores próprios ou a terceiros — as únicas requisições feitas são para
@@ -38,6 +47,10 @@ Nenhuma informação é enviada para o desenvolvedor nem para terceiros.
   `chrome.storage.session`, que é **memória do navegador**: não é escrita em disco e é
   descartada quando o Chrome é fechado. Ela existe apenas para que o painel consiga comparar a
   coleção com os módulos depois que o usuário sai da página do Studio.
+- O **endereço** do arquivo de legenda de cada vídeo (sem cabeçalhos, sem token) fica no mesmo
+  `chrome.storage.session` e desaparece junto com ele — serve para não repetir a consulta.
+- O **texto das transcrições não é armazenado** em lugar nenhum: ele é convertido e gravado no
+  arquivo que o usuário escolheu baixar, e descartado em seguida.
 
 ## Permissões e por que são usadas
 

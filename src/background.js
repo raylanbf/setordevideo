@@ -10,6 +10,12 @@
 
 const CHAVE = "sdv-inventario";
 const CHAVE_ANALISE = "sdv-analises";
+// Formato da rota de transcrição, aprendido quando o usuário usa "Baixar histórico".
+// Guardamos SÓ o molde da URL (com marcadores no lugar do id do vídeo) — nunca os
+// cabeçalhos de sessão que autenticam a chamada.
+const CHAVE_LEGENDA = "sdv-legenda";
+// mediaId -> id do arquivo de legenda, colhido das respostas do Studio.
+const CHAVE_CAPTION_FILES = "sdv-caption-files";
 const MAX_COLECOES = 8; // lembra as últimas coleções visitadas na sessão
 const MAX_ANALISES = 6; // e as últimas análises de módulos, por curso
 
@@ -101,6 +107,57 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   if (msg.type === "sdv-analysis") {
     guardarAnalise(msg.data).then(() => sendResponse({ ok: true }));
+    return true;
+  }
+
+  if (msg.type === "sdv-caption-endpoint") {
+    const d = msg.data || {};
+    if (!d.template) return;
+    chrome.storage.session
+      .set({
+        [CHAVE_LEGENDA]: {
+          template: d.template,
+          studioDomain: d.studioDomain || null,
+          // Molde que existe mas não serve para outros vídeos (identifica o arquivo de
+          // legenda). Guardamos para o painel poder explicar o motivo ao usuário.
+          inutil: !!d.inutil,
+          ids: d.ids || [],
+          at: Date.now(),
+        },
+      })
+      .catch(() => {});
+    return;
+  }
+
+  // Mapa mediaId -> id do arquivo de legenda, montado com o que passa pelas respostas do
+  // Studio. É o que permite baixar a transcrição de um vídeo sem abri-lo de novo.
+  if (msg.type === "sdv-caption-files") {
+    const achados = (msg.data && msg.data.achados) || [];
+    if (!achados.length) return;
+    const origem = (msg.data && msg.data.origem) || null;
+    lerChave(CHAVE_CAPTION_FILES).then((mapa) => {
+      for (const a of achados) {
+        // Guardamos de onde veio: é a chamada que entrega o id da legenda, ou seja, a rota
+        // que faria o download funcionar para todos os vídeos sem abrir um a um.
+        if (a && a.mediaId && a.id) mapa[String(a.mediaId)] = { id: a.id, origem };
+      }
+      chrome.storage.session.set({ [CHAVE_CAPTION_FILES]: mapa }).catch(() => {});
+    });
+    return;
+  }
+
+  if (msg.type === "sdv-get-caption-files") {
+    lerChave(CHAVE_CAPTION_FILES).then((mapa) => sendResponse({ mapa }));
+    return true;
+  }
+
+  if (msg.type === "sdv-caption-forget") {
+    chrome.storage.session.remove(CHAVE_LEGENDA).catch(() => {});
+    return;
+  }
+
+  if (msg.type === "sdv-get-caption-endpoint") {
+    lerChave(CHAVE_LEGENDA).then((r) => sendResponse({ receita: r && r.template ? r : null }));
     return true;
   }
 

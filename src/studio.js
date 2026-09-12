@@ -24,6 +24,12 @@
   let latestKey = null;
   let renderedId = null;
 
+  // Pedidos de transcrição em voo, do painel para o net-hook (pedido -> {responder, timer}).
+  const pedidosLegenda = new Map();
+  let seqLegenda = 0;
+  let receitaConhecida = false; // o net-hook já viu uma legenda passar neste frame?
+  let apiPronta = false; // e já capturou os cabeçalhos de sessão da API do Studio?
+
   function resetStats() {
     statsByCollection.clear();
     latestKey = null;
@@ -242,6 +248,113 @@
       return;
     }
 
+    // O net-hook aprendeu a rota da transcrição ("Baixar histórico"). Guardamos apenas o
+    // FORMATO da URL — nunca os cabeçalhos de sessão, que ficam só na memória do frame.
+    if (d.type === "caption-endpoint" && d.template) {
+      receitaConhecida = true;
+      try {
+        chrome.runtime?.sendMessage(
+          {
+            type: "sdv-caption-endpoint",
+            data: { template: d.template, ids: d.ids || [], studioDomain: location.host },
+          },
+          () => void chrome.runtime.lastError
+        );
+
+        // O id aprendido é a legenda de um vídeo específico — o sufixo diz de qual. Guardar
+        // no mapa faz cada "Baixar histórico" somar um vídeo, em vez de substituir o anterior.
+        const achados = (d.ids || [])
+          .map((id) => {
+            const m = String(id).match(/-(\d+)$/);
+            return m ? { mediaId: m[1], id: String(id) } : null;
+          })
+          .filter(Boolean);
+        if (achados.length) {
+          chrome.runtime?.sendMessage(
+            { type: "sdv-caption-files", data: { achados, origem: "molde aprendido" } },
+            () => void chrome.runtime.lastError
+          );
+        }
+      } catch {
+        /* extensão recarregada: ignora */
+      }
+      return;
+    }
+
+    // Resposta a um pedido de transcrição feito pelo painel.
+    if (d.type === "caption-response" && pedidosLegenda.has(d.pedido)) {
+      const pendente = pedidosLegenda.get(d.pedido);
+      pedidosLegenda.delete(d.pedido);
+      clearTimeout(pendente.timer);
+      pendente.responder({
+        ok: !!d.ok,
+        texto: d.texto || null,
+        erro: d.erro || null,
+        url: d.url || null,
+        diagnostico: d.diagnostico || null,
+        diario: d.diario || null, // o que o frame tentou, para o relatório do painel
+      });
+      return;
+    }
+
+    if (d.type === "caption-api-pronta") {
+      apiPronta = true;
+      return;
+    }
+
+    // Ids de arquivo de legenda vistos passando: guardamos por vídeo, para o painel poder
+    // montar o download sem depender de descobrir a rota.
+    if (d.type === "caption-files" && Array.isArray(d.achados) && d.achados.length) {
+      try {
+        chrome.runtime?.sendMessage(
+          { type: "sdv-caption-files", data: { achados: d.achados, origem: d.origem || null } },
+          () => void chrome.runtime.lastError
+        );
+      } catch {
+        /* ignora */
+      }
+      return;
+    }
+
+    // O endereço da legenda existe, mas identifica o arquivo de legenda e não o vídeo.
+    // Guardamos o diagnóstico para o painel poder explicar isso em vez de dizer só
+    // "ainda não sei como o Studio entrega a transcrição".
+    if (d.type === "caption-endpoint-inutil") {
+      try {
+        chrome.runtime?.sendMessage(
+          {
+            type: "sdv-caption-endpoint",
+            data: {
+              template: d.template,
+              inutil: true,
+              ids: d.ids || [],
+              studioDomain: location.host,
+            },
+          },
+          () => void chrome.runtime.lastError
+        );
+      } catch {
+        /* ignora */
+      }
+      return;
+    }
+
+    // O formato aprendido se provou errado: apaga aqui e no armazenamento da sessão, para
+    // que o próximo "Baixar histórico" possa ensinar o certo.
+    if (d.type === "caption-forget") {
+      receitaConhecida = false;
+      try {
+        chrome.runtime?.sendMessage({ type: "sdv-caption-forget" }, () => void chrome.runtime.lastError);
+      } catch {
+        /* ignora */
+      }
+      return;
+    }
+
+    // Transcrição montada no próprio navegador. Não ensina rota nenhuma — e não pode
+    // apagar uma já aprendida, porque a SPA também transforma em Blob o que baixou da rede.
+    if (d.type === "caption-blob") return;
+
     // Fallback de instâncias sem o endpoint `tiles`: só a contagem, e nunca por cima
     // de dados reais de duração já obtidos.
     if (d.type === "media-count" && typeof d.count === "number") {
@@ -266,7 +379,25 @@
   // Só respondemos se este frame estiver numa view de coleção — assim o popup
   // fica vazio quando o usuário não está no Studio.
   chrome.runtime?.onMessage.addListener((msg, _sender, sendResponse) => {
-    if (!msg || msg.type !== "sdv-get-current") return;
+    if (!msg) return;
+
+    // O painel quer a transcrição de um vídeo. Quem busca é este frame: os cabeçalhos
+    // de sessão do Studio vivem aqui e não precisam sair daqui.
+    if (msg.type === "sdv-get-caption") {
+      // Responde se souber a rota OU se tiver os cabeçalhos de sessão da API: são eles que
+      // permitem consultar as legendas de um vídeo, e o painel não os tem.
+      if (!receitaConhecida && !apiPronta) return;
+      const pedido = ++seqLegenda;
+      const timer = setTimeout(() => {
+        pedidosLegenda.delete(pedido);
+        sendResponse({ ok: false, erro: "o Studio demorou demais para responder" });
+      }, 20000);
+      pedidosLegenda.set(pedido, { responder: sendResponse, timer });
+      window.postMessage({ __sdv: true, type: "caption-request", pedido, video: msg.video }, "*");
+      return true; // resposta assíncrona
+    }
+
+    if (msg.type !== "sdv-get-current") return;
     const id = extractCollectionId();
     if (!id) return; // este frame não tem coleção: não responde
     const ctx = extractCanvasContext() || {};

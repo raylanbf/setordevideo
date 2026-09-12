@@ -161,6 +161,22 @@
       ul.videos { list-style: none; margin: 8px 0 0; padding: 0; }
       ul.videos li { padding: 6px 0; border-bottom: 1px solid var(--linha); }
       ul.videos li:last-child { border-bottom: none; }
+      .vlinha { display: flex; align-items: flex-start; gap: 8px; }
+      .vlinha .vt { flex: 1; min-width: 0; }
+      button.tx {
+        flex: none;
+        border: 1px solid var(--linha);
+        background: transparent;
+        border-radius: 6px;
+        padding: 2px 6px;
+        font-size: 12px;
+        line-height: 1.4;
+        cursor: pointer;
+      }
+      button.tx:hover:not(:disabled) { background: rgba(125, 125, 125, .14); }
+      button.tx.lote { border-color: var(--marca); color: var(--marca); font-weight: 600; }
+      button.tx:disabled { opacity: .5; cursor: default; }
+
       .vt { font-weight: 600; font-size: 12px; }
       .vt a { color: var(--marca); text-decoration: none; }
       .vt a:hover { text-decoration: underline; }
@@ -169,6 +185,17 @@
       .onde .sobra { color: var(--alerta); }
       .onde a { color: var(--marca); text-decoration: none; }
       .onde a:hover { text-decoration: underline; }
+
+      .url-tentada {
+        display: block;
+        margin-top: 2px;
+        font-family: ui-monospace, monospace;
+        font-size: 10px;
+        color: var(--fraco);
+        word-break: break-all;
+        user-select: all;
+        white-space: pre-wrap; /* o diagnóstico vem em linhas separadas */
+      }
 
       .msg { color: var(--fraco); }
       .erro { color: var(--alerta); font-size: 12px; }

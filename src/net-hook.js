@@ -17,6 +17,10 @@
 
   const HOST_RE = /instructuremedia\.com/;
   const PATH_RE = /media|collection|tiles/i;
+  // Legendas/transcrição ("Baixar histórico" no menu ⋮ do player — tradução de
+  // "Download Transcript"). Não sabemos de antemão a rota de cada instância, então
+  // reconhecemos pelo nome e APRENDEMOS o formato na primeira vez que ela passa.
+  const CAPTION_RE = /caption|transcript|subtitle|legend|\.vtt|\.srt|\/tracks?\b/i;
   const MAX_PAGES = 50; // teto de segurança: 50 x 20 = 1000 vídeos
   const LOG = "[SDV]";
 
@@ -314,8 +318,13 @@
     try {
       const json = JSON.parse(text);
 
+      // Qualquer resposta pode carregar o id da legenda de um vídeo: vale olhar todas.
+      garimparCaptionFiles(url, json);
+
       const parsed = readTiles(json);
       if (parsed && parsed.items.length) {
+        guardarHeadersDaApi(req); // é uma chamada autenticada da SPA: guarde como sabe falar
+        diagnosticarCaptions(json);
         log("tiles interceptado", {
           url,
           itens: parsed.items.length,
@@ -344,6 +353,615 @@
     }
   }
 
+  // --- legendas / transcrição ("Baixar histórico") ------------------------------
+  // A rota muda de instância para instância, então não a chutamos: quando o usuário
+  // clica em "Baixar histórico" uma vez, guardamos o FORMATO da chamada (com o id do
+  // vídeo trocado por um marcador) e passamos a montá-la para os outros vídeos.
+  //
+  // A receita fica só em MEMÓRIA deste frame. Os cabeçalhos de sessão NUNCA saem daqui
+  // nem são gravados — quem repete a chamada é este script, dentro do frame do Studio,
+  // igualzinho ao que já acontece na paginação da coleção.
+  let receitaLegenda = null;
+
+  // Troca os identificadores da mídia por marcadores, para servir a qualquer vídeo.
+  // O id numérico só vira marcador se nenhum id "forte" apareceu: um número solto na URL
+  // pode ser cache-busting, e trocá-lo por engano geraria um molde quebrado.
+  function generalizarUrl(url) {
+    const ids = [];
+    // "?1789171707968" é só cache-busting: não identifica nada e não deve entrar no molde.
+    let t = String(url).replace(/[?&]\d{8,}$/, "");
+
+    t = t.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-\d+/gi, (m) => {
+      ids.push(m);
+      return "{launch}";
+    });
+    if (!ids.length) {
+      t = t.replace(/m-[A-Za-z0-9_-]{20,}/g, (m) => {
+        ids.push(m);
+        return "{notorious}";
+      });
+    }
+    if (!ids.length) {
+      t = t.replace(/(^|[/=])(\d{4,})(?=[/?&#]|$)/g, (m, antes, num) => {
+        ids.push(num);
+        return antes + "{mediaId}";
+      });
+    }
+    return { template: t, ids };
+  }
+
+  // O id que aparece no endereço é mesmo de um VÍDEO da coleção? Se não for, ele identifica
+  // outra coisa (o arquivo de legenda, por exemplo) e trocá-lo pelo id de outro vídeo só
+  // pode dar 404 — é exatamente esse o caso que precisamos detectar em vez de insistir.
+  function idDeVideoConhecido(valor) {
+    const alvo = String(valor);
+    for (const s of stats.values()) {
+      for (const v of s.videos.values()) {
+        if (v.ltiLaunchId === alvo || v.notoriousId === alvo || String(v.mediaId) === alvo) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // Assinatura de legenda de verdade. Cobre os três formatos que o Studio pode devolver:
+  // VTT (cabeçalho WEBVTT), SRT (marcação de tempo completa) e JSON (lista de trechos com
+  // tempo e texto). Só "-->" não bastaria — apareceria em qualquer HTML com uma seta escrita.
+  function pareceLegenda(texto) {
+    const t = String(texto || "").trim();
+    if (!t) return false;
+    if (/^\s*WEBVTT/i.test(t)) return true;
+    if (/\d{2}:\d{2}[:.,]\d{2,3}\s*-->\s*\d{2}:\d{2}/.test(t)) return true;
+    if (
+      /^\s*[[{]/.test(t) &&
+      /"(text|content|caption|body)"\s*:/i.test(t) &&
+      /"(start|start_time|startTime|begin|from|offset)"\s*:/i.test(t)
+    ) {
+      return true;
+    }
+    // O "Baixar histórico" do Studio entrega a transcrição já pronta: texto corrido, sem
+    // marcação nenhuma. Então texto que não é HTML nem JSON, e tem corpo, também conta —
+    // exigir VTT aqui fazia a extensão recusar justamente a resposta certa.
+    if (!/^[[{<]/.test(t) && t.length > 40) return true;
+    return false;
+  }
+
+  function aprenderLegenda(url, req, amostra) {
+    const { template, ids } = generalizarUrl(url);
+    if (!/\{(launch|notorious|mediaId)\}/.test(template)) {
+      // Sem nenhum id na URL não dá para generalizar para os outros vídeos — mas ainda
+      // avisamos, porque a URL crua serve de pista para estender a detecção.
+      warn("legenda encontrada, mas sem id na URL (não dá para repetir):", url);
+      return;
+    }
+
+    // O id do endereço precisa ser o de um vídeo. Se identifica o arquivo de legenda,
+    // o molde não serve para mais ninguém e insistir nele só geraria 404 em série.
+    // Se o id é de um vídeo ou do arquivo de legenda, decidimos só na hora de USAR: aqui a
+    // listagem da coleção pode ainda não ter chegado a este frame (o usuário costuma clicar
+    // em "Baixar histórico" dentro do player, antes de abrir a grade), e nesse instante todo
+    // id pareceria desconhecido.
+    log("transcrição: ids vistos no endereço", ids);
+    receitaLegenda = {
+      template,
+      headers: (req && req.headers) || {},
+      credentials: (req && req.credentials) || "same-origin",
+      ids, // avaliados na hora do uso, quando o inventário já chegou
+    };
+    console.info(`${LOG} transcrição: formato aprendido → ${template}`);
+    window.postMessage(
+      {
+        __sdv: true,
+        type: "caption-endpoint",
+        template,
+        ids, // o painel decide com eles se o id é do vídeo ou do arquivo de legenda
+        amostra: String(amostra || "").slice(0, 160),
+      },
+      "*"
+    );
+  }
+
+  // Diagnóstico, uma vez por sessão: a listagem da coleção já traz algum identificador de
+  // legenda? Se trouxer, é por ali que se monta o endereço de cada vídeo sem ter de abrir
+  // um a um — e some a necessidade de aprender a rota pelo clique.
+  let jaDiagnosticou = false;
+  function diagnosticarCaptions(json) {
+    if (jaDiagnosticou) return;
+    jaDiagnosticou = true;
+    const achados = [];
+    (function varrer(obj, caminho, prof) {
+      if (!obj || typeof obj !== "object" || prof > 6 || achados.length >= 20) return;
+      for (const k of Object.keys(obj)) {
+        const v = obj[k];
+        const p = caminho ? `${caminho}.${k}` : k;
+        if (/caption|transcript|subtitle/i.test(k)) {
+          achados.push(`${p} = ${v && typeof v === "object" ? JSON.stringify(v).slice(0, 160) : v}`);
+        }
+        if (v && typeof v === "object") varrer(v, p, prof + 1);
+      }
+    })(json, "", 0);
+    console.info(
+      `${LOG} campos de legenda na listagem da coleção:`,
+      achados.length ? achados : "nenhum — a listagem não diz nada sobre legendas"
+    );
+  }
+
+  // Descarta um formato que se provou errado, para que o próximo "Baixar histórico" possa
+  // ensinar o certo. Sem isso, um aprendizado ruim trava a função até fechar o Chrome.
+  function esquecerLegenda(motivo) {
+    if (!receitaLegenda) return;
+    warn(
+      `transcrição: descartei o formato aprendido (${motivo}). ` +
+        'Use "Baixar histórico" no player de novo para eu reaprender.'
+    );
+    receitaLegenda = null;
+    window.postMessage({ __sdv: true, type: "caption-forget" }, "*");
+  }
+
+  // Observa qualquer resposta que cheire a legenda, venha de onde vier.
+  function observarLegenda(url, texto, req) {
+    if (receitaLegenda) return; // já sabemos o formato
+    if (!CAPTION_RE.test(url) && !pareceLegenda(texto)) return;
+    if (!pareceLegenda(texto)) {
+      // Visível sem ligar o modo de diagnóstico: é a pista de que o endereço foi achado
+      // mas o formato da resposta é outro — exatamente o que precisamos saber para ajustar.
+      console.info(
+        `${LOG} transcrição: endereço parece de legenda, mas o conteúdo não foi reconhecido.`,
+        { url, inicio: String(texto || "").slice(0, 200) }
+      );
+      return;
+    }
+    aprenderLegenda(url, req, texto);
+  }
+
+  // --- achar o arquivo de legenda de cada vídeo ---------------------------------
+  // O endereço aprendido aponta para um ARQUIVO de legenda, cujo id não está no inventário.
+  // Para servir os outros vídeos precisamos, antes, perguntar ao Studio quais legendas cada
+  // vídeo tem. A rota disso não é documentada aqui, então testamos as formas usuais a partir
+  // da base que já conhecemos e ficamos com a que responder — o próprio Studio confirma qual
+  // é a certa, em vez de fixarmos um palpite no código.
+  const captionFilePorVideo = new Map(); // mediaId -> id do arquivo de legenda
+  let rotaDeLista = null; // molde da rota que funcionou, para reusar nos próximos vídeos
+
+  // Diário do pedido em curso. Vai junto com a resposta ao painel, que o grava no arquivo de
+  // diagnóstico: sem isso o que acontece aqui dentro do frame fica invisível.
+  let diarioPedido = [];
+  function anotar(linha) {
+    diarioPedido.push(linha);
+    console.info(`${LOG} ${linha}`);
+  }
+
+  // Cabeçalhos de uma chamada autenticada da SPA (os mesmos que a paginação da coleção já
+  // reusa). A API do Studio autentica por cabeçalho: sem eles a rota existe mas responde
+  // 401. O download do arquivo pronto aceita só o cookie — a API, não.
+  let headersDaApi = null;
+
+  function guardarHeadersDaApi(req) {
+    if (headersDaApi) return;
+    const h = (req && req.headers) || null;
+    if (!h || !Object.keys(h).length) return;
+    headersDaApi = h;
+    console.info(`${LOG} cabeçalhos de sessão da API capturados (${Object.keys(h).length}).`);
+    window.postMessage({ __sdv: true, type: "caption-api-pronta" }, "*");
+  }
+
+  function baseDaApi(template) {
+    const m = String(template || "").match(/^(.*)\/caption_files\//);
+    return m ? m[1] : null;
+  }
+
+  // A base da API deste Studio. Sai do molde quando há um; senão, do próprio host — o 401
+  // (e não 404) nas rotas /api/media_management/… confirma que é esse o caminho.
+  function baseProvavel() {
+    return (
+      baseDaApi(receitaLegenda && receitaLegenda.template) ||
+      `${location.origin}/api/media_management`
+    );
+  }
+
+  function candidatasDeLista(base, video) {
+    const ids = {
+      "{mediaId}": video.mediaId || "",
+      "{launch}": video.ltiLaunchId || "",
+      "{notorious}": video.notoriousId || "",
+    };
+    const moldes = rotaDeLista
+      ? [rotaDeLista] // já sabemos qual funciona: não testamos as outras de novo
+      : [
+          `${base}/media/{mediaId}/caption_files`,
+          `${base}/media/{notorious}/caption_files`,
+          `${base}/media/{launch}/caption_files`,
+          `${base}/caption_files?media_id={mediaId}`,
+        ];
+    const saida = [];
+    for (const molde of moldes) {
+      let url = molde;
+      let completo = true;
+      for (const [marca, valor] of Object.entries(ids)) {
+        if (url.includes(marca)) {
+          if (!valor) { completo = false; break; }
+          url = url.split(marca).join(encodeURIComponent(valor));
+        }
+      }
+      if (completo) saida.push({ molde, url });
+    }
+    return saida;
+  }
+
+  // Extrai o id do arquivo de legenda de uma resposta de listagem, sem depender do formato
+  // exato: procuramos ids no mesmo padrão do que já vimos funcionar no download.
+  // Se a resposta já traz o endereço do arquivo, usá-lo é melhor do que extrair um id e
+  // remontar a URL: elimina o palpite sobre qual campo é o identificador certo.
+  function acharUrlDeCaption(json) {
+    let achada = null;
+    (function varrer(o, prof) {
+      if (achada || !o || typeof o !== "object" || prof > 6) return;
+      if (Array.isArray(o)) {
+        for (const item of o) varrer(item, prof + 1);
+        return;
+      }
+      for (const k of Object.keys(o)) {
+        const v = o[k];
+        if (typeof v === "string" && /caption_files\/[^/\s"]+/.test(v)) {
+          achada = v;
+          return;
+        }
+        if (v && typeof v === "object") varrer(v, prof + 1);
+      }
+    })(json, 0);
+    return achada;
+  }
+
+  function acharIdDeCaptionFile(json) {
+    const fortes = []; // mesmo formato do id que o download usou: {uuid}-{media_id}
+    const fracos = []; // id de um objeto que parece legenda, em outro formato
+    const PISTAS = ["url", "language", "locale", "srclang", "kind", "status", "media_id"];
+
+    (function varrer(o, prof) {
+      if (!o || typeof o !== "object" || prof > 5) return;
+      if (Array.isArray(o)) {
+        for (const item of o) varrer(item, prof + 1);
+        return;
+      }
+      const pareceLegenda = PISTAS.some((k) => k in o);
+      for (const k of Object.keys(o)) {
+        const v = o[k];
+        if ((k === "id" || /caption_file_id$/i.test(k)) && (typeof v === "string" || typeof v === "number")) {
+          const s = String(v);
+          if (/^[0-9a-f-]{8,}-\d+$/i.test(s) && !idDeVideoConhecido(s)) fortes.push(s);
+          else if (pareceLegenda) fracos.push(s);
+        }
+        if (v && typeof v === "object") varrer(v, prof + 1);
+      }
+    })(json, 0);
+
+    return fortes[0] || fracos[0] || null;
+  }
+
+  async function descobrirCaptionFile(video) {
+    const chave = String(video.mediaId || video.ltiLaunchId || "");
+    if (captionFilePorVideo.has(chave)) return captionFilePorVideo.get(chave);
+
+    const base = baseProvavel();
+    if (!headersDaApi) {
+      console.info(
+        `${LOG} legenda: ainda não capturei os cabeçalhos da API do Studio — abra a grade da ` +
+          "coleção uma vez para que a listagem passe por aqui."
+      );
+    }
+
+    for (const { molde, url } of candidatasDeLista(base, video)) {
+      try {
+        // Os cabeçalhos da SPA são obrigatórios aqui: é a API, não o arquivo pronto.
+        const res = await origFetch.call(window, url, {
+          method: "GET",
+          headers: Object.assign(
+            { Accept: "application/json" },
+            headersDaApi || (receitaLegenda && receitaLegenda.headers) || {}
+          ),
+          credentials: "include",
+        });
+        if (!res.ok) {
+          // Visível sem ligar o diagnóstico: são no máximo quatro linhas, e são elas que
+          // dizem qual rota existe nesta instância do Studio.
+          anotar(`lista: ${res.status} em ${url}`);
+          continue;
+        }
+        const corpo = await res.text();
+        let json = null;
+        try {
+          json = JSON.parse(corpo);
+        } catch {
+          anotar(`lista: resposta não é JSON em ${url} :: ${corpo.slice(0, 150)}`);
+          continue;
+        }
+        // O corpo vai para o diário mesmo quando dá certo: é ele que mostra qual campo é o
+        // identificador de verdade, e foi a falta disso que fez o download tentar o id errado.
+        anotar(`lista: 200 em ${url} :: ${corpo.slice(0, 500)}`);
+
+        const urlDireta = acharUrlDeCaption(json);
+        const id = acharIdDeCaptionFile(json);
+        if (!urlDireta && !id) {
+          anotar("lista: respondeu, mas não achei endereço nem id de legenda.");
+          continue;
+        }
+        if (!rotaDeLista) {
+          rotaDeLista = molde;
+          anotar(`rota da lista descoberta → ${molde}`);
+        }
+        const escolhido = { id: id || null, url: urlDireta ? absUrl(urlDireta) : null };
+        anotar(`lista: escolhido id=${escolhido.id || "—"} url=${escolhido.url || "—"}`);
+        captionFilePorVideo.set(chave, escolhido);
+        return escolhido;
+      } catch (err) {
+        anotar(`lista: falha de rede em ${url} :: ${err && err.message}`);
+      }
+    }
+    anotar("nenhuma das rotas de lista serviu.");
+    return null;
+  }
+
+  // `captionFileId` chega preenchido quando o endereço aprendido aponta para o arquivo de
+  // legenda: aí o marcador do molde vale por ele, e não pelo identificador do vídeo.
+  // O id do arquivo de legenda é `{uuid próprio}-{media_id}`: o uuid não se deriva do vídeo,
+  // mas o SUFIXO é o media id. Então, quando um id desses passa em qualquer resposta do
+  // Studio, sabemos exatamente a que vídeo pertence — e a chamada onde ele apareceu é a rota
+  // que o entrega. É assim que descobrimos a rota sem precisar adivinhá-la.
+  const RE_CAPTION_FILE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-(\d+)$/i;
+
+  function temInventario() {
+    for (const s of stats.values()) if (s.videos.size) return true;
+    return false;
+  }
+
+  function garimparCaptionFiles(url, json) {
+    // Sem o inventário carregado não dá para separar o id da legenda do id do vídeo: tudo
+    // pareceria "desconhecido". Garimpar aqui gravaria o id errado — foi o que aconteceu.
+    if (!temInventario()) return;
+
+    const achados = [];
+    (function varrer(o, prof) {
+      if (!o || typeof o !== "object" || prof > 6 || achados.length >= 30) return;
+      for (const k of Object.keys(o)) {
+        const v = o[k];
+        if (typeof v === "string") {
+          const m = v.match(RE_CAPTION_FILE);
+          // Tem o formato e não é o identificador de nenhum vídeo: é arquivo de legenda.
+          if (m && !idDeVideoConhecido(v)) achados.push({ campo: k, id: v, mediaId: m[1] });
+        } else if (v && typeof v === "object") {
+          varrer(v, prof + 1);
+        }
+      }
+    })(json, 0);
+
+    if (!achados.length) return;
+    // Mesmo formato usado pela consulta à listagem: { id, url }.
+    for (const a of achados) {
+      if (!captionFilePorVideo.has(a.mediaId)) {
+        captionFilePorVideo.set(a.mediaId, { id: a.id, url: null });
+      }
+    }
+    console.info(`${LOG} legenda: ${achados.length} id(s) encontrados em ${url}`, achados);
+    window.postMessage(
+      {
+        __sdv: true,
+        type: "caption-files",
+        origem: url,
+        achados: achados.map((a) => ({ mediaId: a.mediaId, id: a.id })),
+      },
+      "*"
+    );
+  }
+
+  function urlDaLegenda(video, captionFileId) {
+    if (!receitaLegenda || !video) return null;
+    const valores = captionFileId
+      ? { "{launch}": captionFileId, "{notorious}": captionFileId, "{mediaId}": captionFileId }
+      : {
+          "{launch}": video.ltiLaunchId || "",
+          "{notorious}": video.notoriousId || "",
+          "{mediaId}": video.mediaId || "",
+        };
+    let url = receitaLegenda.template;
+    for (const [marca, valor] of Object.entries(valores)) {
+      if (url.includes(marca)) {
+        if (!valor) return null; // falta o id que esta rota exige
+        url = url.split(marca).join(encodeURIComponent(valor));
+      }
+    }
+    return url;
+  }
+
+  // O painel pede a transcrição de um vídeo; quem busca é este frame, que tem a sessão.
+  async function atenderPedidoLegenda(pedido, video) {
+    diarioPedido = []; // cada pedido conta a sua própria história
+    const responder = (resposta) =>
+      window.postMessage(
+        Object.assign(
+          { __sdv: true, type: "caption-response", pedido, diario: diarioPedido.join("\n   ") },
+          resposta
+        ),
+        "*"
+      );
+
+    anotar(
+      `pedido: "${video && video.title}" mediaId=${video && video.mediaId} | ` +
+        `cabeçalhos da API: ${headersDaApi ? "sim" : "NÃO"} | molde: ${receitaLegenda ? "sim" : "não"}`
+    );
+
+    // Basta ter os cabeçalhos da API: com eles dá para consultar a legenda de um vídeo e
+    // montar o download, mesmo sem ninguém ter usado "Baixar histórico" antes.
+    if (!receitaLegenda && !headersDaApi) {
+      responder({ ok: false, erro: "ainda-nao-aprendido" });
+      return;
+    }
+
+    // Agora sim: o id do endereço aprendido é de um vídeo ou do arquivo de legenda? Só o
+    // inventário responde, e a esta altura ele já chegou.
+    const ids = (receitaLegenda && receitaLegenda.ids) || [];
+    // Sem molde, assumimos o caminho por arquivo de legenda: é o que o 401 das rotas
+    // /api/media_management/... confirma existir nesta instância.
+    const precisaDeCaptionFile = ids.length === 0 || !ids.some(idDeVideoConhecido);
+    console.info(
+      `${LOG} transcrição: o id do endereço aprendido é de ` +
+        (precisaDeCaptionFile ? "ARQUIVO de legenda (vou procurar o do vídeo pedido)" : "VÍDEO"),
+      ids
+    );
+
+    let captionFileId = null;
+    if (precisaDeCaptionFile) {
+      // O id do molde já é o arquivo de legenda de um vídeo: o sufixo diz de qual.
+      for (const id of ids) {
+        const m = String(id).match(/-(\d+)$/);
+        if (m && !captionFilePorVideo.has(m[1])) {
+          captionFilePorVideo.set(m[1], { id: String(id), url: null });
+        }
+      }
+      captionFileId = await descobrirCaptionFile(video);
+      if (!captionFileId) {
+        responder({
+          ok: false,
+          erro:
+            "Não consegui descobrir o arquivo de legenda deste vídeo. O Studio identifica a " +
+            "transcrição por um id próprio, e não achei a rota que lista as legendas de um vídeo.",
+        });
+        return;
+      }
+    }
+
+    // Preferimos o endereço que a própria listagem entregou; só montamos um quando ela não
+    // veio com nenhum.
+    const alvo = captionFileId
+      ? captionFileId.url ||
+        `${baseProvavel()}/caption_files/${encodeURIComponent(captionFileId.id)}`
+      : urlDaLegenda(video, null);
+    if (alvo) anotar(`download: ${alvo}`);
+    if (!alvo) {
+      responder({ ok: false, erro: "Este vídeo não tem o identificador que a rota de legenda exige." });
+      return;
+    }
+    // O endereço original trazia um número solto na query. Tratei como cache-busting, mas
+    // pode ser exigido — então, se a chamada limpa falhar, repetimos com ele.
+    const tentativas = alvo.includes("?") ? [alvo] : [alvo, `${alvo}?${Date.now()}`];
+
+    try {
+      let res = null;
+      for (const tentativa of tentativas) {
+        res = await origFetch.call(window, tentativa, {
+          method: "GET",
+          headers: Object.assign(
+            { Accept: "text/plain, text/vtt, */*" },
+            (receitaLegenda && receitaLegenda.headers) || headersDaApi || {}
+          ),
+          credentials: "include",
+        });
+        if (res.ok) break;
+        log(`transcrição: ${res.status} em ${tentativa}`);
+      }
+      if (!res.ok) {
+        // Formato errado (aprendido de um link que não era a legenda, ou com o id trocado
+        // errado): esquecemos, senão a extensão repetiria o mesmo erro para sempre. Mas se o
+        // id do arquivo veio da rota de lista, o molde está certo e a falha é só deste vídeo.
+        if (!captionFileId && (res.status === 404 || res.status === 401 || res.status === 403)) {
+          esquecerLegenda(`o servidor respondeu ${res.status}`);
+        }
+        // Os dois ids lado a lado dizem na hora se o molde está errado ou se é o vídeo que
+        // não tem aquela legenda — sem isso o 404 não explica nada.
+        responder({
+          ok: false,
+          erro: `o Studio respondeu ${res.status}`,
+          url: alvo,
+          diagnostico:
+            `id no molde: ${ids.join(", ") || "—"} | ` +
+            `id deste vídeo: ${video.ltiLaunchId || video.mediaId || "—"} | ` +
+            `arquivo de legenda: ${
+              captionFileId ? captionFileId.id || captionFileId.url : "não consultado"
+            }`,
+        });
+        return;
+      }
+      const texto = await res.text();
+      if (!pareceLegenda(texto)) {
+        esquecerLegenda("a resposta não era uma legenda");
+        responder({ ok: false, erro: "o endereço respondeu, mas não com uma legenda", url: alvo });
+        return;
+      }
+      responder({ ok: true, texto, url: alvo });
+    } catch (err) {
+      responder({ ok: false, erro: `falha de rede (${(err && err.message) || err})` });
+    }
+  }
+
+  // Um download pode ser só um link: o navegador busca o arquivo sozinho, sem passar por
+  // fetch nem XHR, e nesse caso nenhum interceptador acima veria a chamada. Então também
+  // olhamos o clique — o endereço está no próprio link.
+  function espiarClique(ev) {
+    if (receitaLegenda) return;
+    const alvo = ev.target;
+    const a = alvo && alvo.closest && alvo.closest("a[href]");
+    if (!a || !CAPTION_RE.test(a.href)) return;
+    // Sem corpo para conferir aqui: aprendemos o formato e validamos no primeiro uso.
+    console.info(`${LOG} transcrição: link de download visto no clique →`, a.href);
+    aprenderLegenda(a.href, { headers: {}, credentials: "include" }, "");
+  }
+  document.addEventListener("click", espiarClique, true);
+
+  // Alguns menus abrem o download em outra janela em vez de usar um link.
+  const origOpen2 = window.open;
+  if (typeof origOpen2 === "function") {
+    window.open = function (url, ...resto) {
+      try {
+        if (!receitaLegenda && url && CAPTION_RE.test(String(url))) {
+          console.info(`${LOG} transcrição: download aberto em nova janela →`, String(url));
+          aprenderLegenda(absUrl(url), { headers: {}, credentials: "include" }, "");
+        }
+      } catch {}
+      return origOpen2.apply(this, [url, ...resto]);
+    };
+  }
+
+  window.addEventListener("message", (event) => {
+    if (event.source !== window) return;
+    const d = event.data;
+    if (!d || d.__sdv !== true) return;
+    if (d.type === "caption-request") atenderPedidoLegenda(d.pedido, d.video);
+    if (d.type === "caption-probe") {
+      window.postMessage(
+        { __sdv: true, type: "caption-probe-reply", pedido: d.pedido, pronto: !!receitaLegenda },
+        "*"
+      );
+    }
+  });
+
+  // Caso o Studio monte o arquivo no próprio navegador (Blob) em vez de baixá-lo de uma
+  // rota: aqui não há requisição para aprender, mas o texto passa por aqui — então pelo
+  // menos avisamos, para o diagnóstico não ficar cego.
+  const origCreateObjectURL = URL.createObjectURL;
+  if (typeof origCreateObjectURL === "function") {
+    URL.createObjectURL = function (obj) {
+      const url = origCreateObjectURL.apply(this, arguments);
+      try {
+        if (obj instanceof Blob && obj.size > 0 && obj.size < 8e6) {
+          obj.text().then((t) => {
+            if (!pareceLegenda(t)) return;
+            console.info(
+              `${LOG} transcrição gerada no próprio navegador (Blob de ${obj.size} bytes) — ` +
+                "não há rota para repetir; o download em lote não vai funcionar nesta instância."
+            );
+            window.postMessage(
+              { __sdv: true, type: "caption-blob", texto: t.slice(0, 400), bytes: obj.size },
+              "*"
+            );
+          }).catch(() => {});
+        }
+      } catch {
+        /* Blob exótico: ignora */
+      }
+      return url;
+    };
+  }
+
   // --- intercepta fetch (sem alterar a resposta) ---
   if (typeof origFetch === "function") {
     window.fetch = function (...args) {
@@ -355,8 +973,10 @@
             (typeof input === "string" ? input : input && input.url) ||
             "";
           const url = absUrl(raw);
-          if (isInteresting(url)) {
-            // Captura como a SPA fez a chamada, para poder repeti-la nas outras páginas.
+          const legenda = !receitaLegenda && CAPTION_RE.test(url);
+          if (isInteresting(url) || legenda) {
+            // Captura como a SPA fez a chamada, para poder repeti-la nas outras páginas
+            // (e, no caso da legenda, nos outros vídeos).
             const fromRequest = input && typeof input === "object" ? input : null;
             const req = {
               method: (init && init.method) || (fromRequest && fromRequest.method) || "GET",
@@ -366,7 +986,14 @@
               credentials:
                 (init && init.credentials) || (fromRequest && fromRequest.credentials) || undefined,
             };
-            res.clone().text().then((t) => analyze(url, t, req)).catch(() => {});
+            res
+              .clone()
+              .text()
+              .then((t) => {
+                observarLegenda(url, t, req);
+                if (isInteresting(url)) analyze(url, t, req);
+              })
+              .catch(() => {});
           }
         } catch {}
         return res;
@@ -397,12 +1024,15 @@
     this.addEventListener("load", function () {
       try {
         const url = this.responseURL || this.__sdvUrl || "";
-        if (isInteresting(url) && typeof this.responseText === "string") {
-          analyze(url, this.responseText, {
+        const legenda = !receitaLegenda && CAPTION_RE.test(url);
+        if ((isInteresting(url) || legenda) && typeof this.responseText === "string") {
+          const req = {
             method: this.__sdvMethod || "GET",
             headers: this.__sdvHeaders || {},
             credentials: this.withCredentials ? "include" : "same-origin",
-          });
+          };
+          observarLegenda(url, this.responseText, req);
+          if (isInteresting(url)) analyze(url, this.responseText, req);
         }
       } catch {}
     });

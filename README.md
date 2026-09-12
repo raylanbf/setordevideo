@@ -68,6 +68,24 @@ quando o Chrome é fechado.
 A coluna *Minutos* é numérica, então dá para somar e montar tabela dinâmica direto no Excel.
 Cada aba fecha com uma linha de TOTAL.
 
+6. **Transcrição dos vídeos.** Cada vídeo das listas ganha um botão **📄** que baixa a
+transcrição em `.txt` — o mesmo texto que o player entrega no menu ⋮ → **"Baixar histórico"**
+(tradução de *Download Transcript*), já limpo e em frases, com título, duração e ID no cabeçalho.
+
+E, acima das listas, **Baixar transcrições por módulo** traz um botão por módulo do curso:
+
+```
+PESQUISA                    📄 4
+4 vídeos · 48min
+```
+
+Um clique baixa a transcrição de todos os vídeos daquele módulo, um `.txt` por vídeo, mostrando
+o progresso no botão. Se algum falhar, os outros continuam e o painel diz quais não saíram.
+
+> **Deixe a biblioteca do Studio carregar antes do primeiro download.** É nesse momento que a
+> extensão capta como falar com a API do Studio. Sem isso, a consulta da legenda volta 401 —
+> é a causa nº 1 de o botão não funcionar. Detalhes em `docs/transcricoes-studio.md`.
+
 ## Segurança / privacidade
 
 - A extensão **lê apenas o número da coleção na URL** do frame do Studio.
@@ -87,9 +105,15 @@ Cada aba fecha com uma linha de TOTAL.
   conteúdo não é interpretado, guardado nem enviado.
 - O acesso ao domínio do Canvas é uma **permissão opcional**, pedida na primeira análise. Se você
   negar, tudo o mais continua funcionando.
-- **Nada vai para fora do navegador** e **nada é gravado em disco**. O inventário da coleção e o
-  resultado da análise ficam em `chrome.storage.session` — memória do navegador, apagada quando o
-  Chrome fecha — para o painel não perder os dados a cada navegação.
+- A **transcrição** é baixada só quando você pede — no 📄 de um vídeo ou no botão de um módulo.
+  A extensão pergunta ao Studio quais legendas aquele vídeo tem (`media/{id}/caption_files`) e
+  baixa o arquivo, tudo com a **sua sessão**. Quem faz essa chamada é o frame do Studio, onde os
+  cabeçalhos de sessão já estão: eles **nunca são gravados** nem saem da aba. O texto vai direto
+  para o arquivo salvo e **não é armazenado**.
+- **Nada vai para fora do navegador** e **nada é gravado em disco** (fora os arquivos que você
+  manda baixar). O inventário da coleção e o resultado da análise ficam em
+  `chrome.storage.session` — memória do navegador, apagada quando o Chrome fecha — para o painel
+  não perder os dados a cada navegação.
 - O link "assistir no Studio" de cada vídeo usa o mesmo proxy de launch que o Canvas já usa nos
   embeds (`external_tools/retrieve`): quem assina a chamada é o Canvas, na hora da abertura.
   Nenhum token é gerado ou guardado pela extensão.
@@ -118,7 +142,8 @@ setordevideo/
 ├─ icons/                 # ícones da extensão (16/32/48/128 px)
 ├─ src/
 │  ├─ background.js       # service worker: abre o painel, guarda acervo e análise na sessão
-│  ├─ net-hook.js         # lê a listagem do Studio: vídeos, durações, pagina tudo
+│  ├─ net-hook.js         # lê a listagem do Studio: vídeos, durações, pagina tudo,
+│  │                      #   e aprende a rota da transcrição para repeti-la por vídeo
 │  ├─ canvas-scan.js      # varre os módulos e cruza os embeds com o acervo
 │  ├─ xlsx.js            # gera a planilha (.xlsx é um ZIP de XMLs; sem biblioteca)
 │  ├─ format.js           # formata segundos como "12h 37min"
@@ -129,6 +154,7 @@ setordevideo/
 ├─ docs/
 │  ├─ canvas-api-extensao.md              # pesquisa de APIs e decisões de arquitetura
 │  ├─ automacao-embed-studio-em-paginas.md # anatomia do embed do Studio (base da análise)
+│  ├─ transcricoes-studio.md              # como o Studio entrega a transcrição (rotas e formato)
 │  └─ publicacao-chrome-web-store.md      # textos e requisitos da loja
 └─ README.md
 ```

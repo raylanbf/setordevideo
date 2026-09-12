@@ -267,7 +267,7 @@ function ondeHtml(locais) {
     .join(" · ");
 }
 
-function listaVideos(videos, mostrarOnde) {
+function listaVideos(videos, mostrarOnde, comTranscricao = false) {
   return `<ul class="videos">${videos
     .map((v) => {
       const dur = sdvFormatDuration(v.duration);
@@ -275,12 +275,21 @@ function listaVideos(videos, mostrarOnde) {
         mostrarOnde && v.locais ? `<div class="onde">${ondeHtml(v.locais)}</div>` : "";
       const link = linkDoVideo(v);
       const titulo = esc(v.title || "(sem título)");
+      // Só os vídeos que estão nos módulos ganham o botão de transcrição.
+      const baixar =
+        comTranscricao && v.mediaId
+          ? `<button class="tx" data-media="${esc(v.mediaId)}"
+               title="Baixar a transcrição (o &quot;histórico&quot; do player)">📄</button>`
+          : "";
       return `<li>
-        <div class="vt">${
-          link
-            ? `<a href="${esc(link)}" target="_blank" rel="noreferrer" title="Assistir no Studio">${titulo}</a>`
-            : titulo
-        }</div>
+        <div class="vlinha">
+          <div class="vt">${
+            link
+              ? `<a href="${esc(link)}" target="_blank" rel="noreferrer" title="Assistir no Studio">${titulo}</a>`
+              : titulo
+          }</div>
+          ${baixar}
+        </div>
         <div class="vd">${dur ? esc(dur) : "duração desconhecida"}</div>
         ${onde}
       </li>`;
@@ -353,15 +362,39 @@ function cartaoAnalise() {
     }</p>
 
     ${
+      // Transcrições de um módulo inteiro: o caso comum é querer tudo de uma unidade.
+      modulosComVideos().length
+        ? `<details><summary>Baixar transcrições por módulo</summary>
+             <p class="hint">Baixa a transcrição de todos os vídeos daquele módulo, um arquivo
+             .txt por vídeo.</p>
+             <ul class="videos">${modulosComVideos()
+               .map(
+                 (m, i) => `<li>
+                   <div class="vlinha">
+                     <div class="vt">${esc(m.nome)}</div>
+                     <button class="tx lote" data-modulo="${i}">📄 ${m.videos.length}</button>
+                   </div>
+                   <div class="vd">${m.videos.length} vídeo${m.videos.length === 1 ? "" : "s"} · ${esc(
+                     textoDuracao(m.videos.reduce((a, v) => a + (v.duration || 0), 0))
+                   )}</div>
+                 </li>`
+               )
+               .join("")}</ul>
+           </details>`
+        : ""
+    }
+    ${
       r.usados.length
         ? `<details><summary>Ver os ${r.usados.length} publicados</summary>
-             ${listaVideos(r.usados, true)}</details>`
+             <p class="hint">📄 baixa a transcrição do vídeo (o "histórico" do menu ⋮ do player).</p>
+             ${listaVideos(r.usados, true, true)}</details>`
         : ""
     }
     ${
       r.naoUsados.length
         ? `<details><summary>Ver os ${r.naoUsados.length} sem uso</summary>
-             ${listaVideos(r.naoUsados, false)}</details>`
+             <p class="hint">📄 baixa a transcrição do vídeo (o "histórico" do menu ⋮ do player).</p>
+             ${listaVideos(r.naoUsados, false, true)}</details>`
         : ""
     }
     ${
@@ -374,6 +407,8 @@ function cartaoAnalise() {
         : ""
     }
     <button class="acao secundaria" id="baixar" style="margin-top:10px">Baixar planilha (.xlsx)</button>
+    <p class="erro" id="aviso-tx" hidden></p>
+    <button class="acao secundaria" id="diag" style="margin-top:6px">Salvar diagnóstico (.txt)</button>
     ${
       a.erros && a.erros.length
         ? `<details><summary>${a.erros.length} item(ns) não puderam ser lidos</summary>
@@ -409,6 +444,17 @@ function desenhar() {
 
   const baixar = document.getElementById("baixar");
   if (baixar) baixar.addEventListener("click", baixarPlanilha);
+
+  const diag = document.getElementById("diag");
+  if (diag) diag.addEventListener("click", salvarDiagnostico);
+
+  for (const b of content.querySelectorAll("button.tx")) {
+    b.addEventListener("click", () =>
+      b.dataset.modulo != null
+        ? baixarLoteDoModulo(Number(b.dataset.modulo), b)
+        : baixarTranscricao(b.dataset.media, b)
+    );
+  }
 }
 
 // --- ações --------------------------------------------------------------------
@@ -481,6 +527,538 @@ async function analisar() {
   }
   guardarAnalise(); // sobrevive à navegação: não se varre os módulos duas vezes
   desenhar();
+}
+
+// --- transcrição ("Baixar histórico" do player) --------------------------------
+// A rota da legenda não é a mesma em toda instância do Studio, então não a chutamos:
+// o net-hook aprende o formato na primeira vez que você usa "Baixar histórico" no
+// player, e a partir daí o painel monta a chamada para os outros vídeos.
+
+const pedirLegendaAoStudio = (tabId, video) =>
+  new Promise((r) =>
+    chrome.tabs.sendMessage(tabId, { type: "sdv-get-caption", video }, (resp) => {
+      void chrome.runtime.lastError; // nenhum frame do Studio na aba: resp vem vazio
+      r(resp || null);
+    })
+  );
+
+const pedirReceitaLegenda = () =>
+  new Promise((r) =>
+    chrome.runtime.sendMessage({ type: "sdv-get-caption-endpoint" }, (resp) => {
+      void chrome.runtime.lastError;
+      r((resp && resp.receita) || null);
+    })
+  );
+
+// Mesmo molde do net-hook (src/net-hook.js, urlDaLegenda). Vive nos dois lados porque o
+// net-hook roda isolado no mundo principal da página e não compartilha código com o painel.
+function montarUrlLegenda(template, video, captionFileId) {
+  const valores = captionFileId
+    ? { "{launch}": captionFileId, "{notorious}": captionFileId, "{mediaId}": captionFileId }
+    : {
+        "{launch}": video.ltiLaunchId || "",
+        "{notorious}": video.notoriousId || "",
+        "{mediaId}": video.mediaId || "",
+      };
+  let url = String(template || "");
+  for (const [marca, valor] of Object.entries(valores)) {
+    if (url.includes(marca)) {
+      if (!valor) return null;
+      url = url.split(marca).join(encodeURIComponent(valor));
+    }
+  }
+  return url;
+}
+
+// --- diário de diagnóstico ----------------------------------------------------
+// Cada tentativa fica registrada aqui e pode ser salva em .txt. É o que permite
+// investigar sem depender de ler o console: o arquivo conta a história inteira.
+// Só entram endereços, códigos de resposta e trechos do corpo — nunca cabeçalhos,
+// que são o que carrega a sessão.
+const diario = [];
+function registrar(linha) {
+  const marca = new Date().toLocaleTimeString("pt-BR");
+  diario.push(`[${marca}] ${linha}`);
+  console.info("[SDV painel]", linha);
+}
+
+function textoDoDiagnostico() {
+  const a = acervo();
+  const partes = [
+    "Setor de Vídeo — diagnóstico da transcrição",
+    `Gerado em: ${new Date().toLocaleString("pt-BR")}`,
+    `Canvas: ${estado.dominio || "—"} | curso: ${estado.courseId || "—"}`,
+    `Studio: ${estado.studioDomain || "—"} | coleção: ${a.collectionId || "—"}`,
+    "",
+    `Acervo conhecido: ${a.videos.length} vídeo(s)`,
+    ...a.videos.map(
+      (v) =>
+        `  - ${v.title || "(sem título)"} | mediaId=${v.mediaId || "—"} | ` +
+        `launch=${v.ltiLaunchId || "—"} | notorious=${v.notoriousId || "—"}`
+    ),
+    "",
+    "Tentativas:",
+    ...(diario.length ? diario : ["  (nenhuma ainda — clique num 📄 antes de salvar)"]),
+  ];
+  return partes.join("\n");
+}
+
+async function salvarDiagnostico() {
+  const botao = document.getElementById("diag");
+  try {
+    // O mapa entra no relatório com a origem de cada id: é ela que diz qual chamada do
+    // Studio entrega a legenda, e portanto se o download em lote é possível.
+    const mapa = await pedirCaptionFiles();
+    const linhas = Object.entries(mapa).map(([mediaId, v]) =>
+      typeof v === "object"
+        ? `  mediaId ${mediaId} -> ${v.id} (de: ${v.origem || "?"})`
+        : `  mediaId ${mediaId} -> ${v}`
+    );
+    const extra = [
+      "",
+      `Arquivos de legenda conhecidos: ${linhas.length}`,
+      ...(linhas.length ? linhas : ["  (nenhum)"]),
+    ].join("\n");
+
+    await baixarBlob(
+      new Blob([textoDoDiagnostico() + extra], { type: "text/plain;charset=utf-8" }),
+      "sdv-diagnostico-transcricao.txt"
+    );
+    if (botao) {
+      botao.textContent = "✅ Diagnóstico salvo";
+      setTimeout(() => (botao.textContent = "Salvar diagnóstico (.txt)"), 2500);
+    }
+  } catch {
+    if (botao) botao.textContent = "Falha ao salvar";
+  }
+}
+
+// --- achar o arquivo de legenda, pelo próprio painel --------------------------
+// Espelha o que o net-hook faz dentro do frame do Studio (src/net-hook.js). Vive aqui
+// também porque este é o caminho usado quando o frame não responde — e era justamente
+// nele que a busca não acontecia.
+function baseDaApi(template) {
+  const m = String(template || "").match(/^(.*)\/caption_files\//);
+  return m ? m[1] : null;
+}
+
+function idDeVideoDoAcervo(valor) {
+  const alvo = String(valor);
+  return acervo().videos.some(
+    (v) => v.ltiLaunchId === alvo || v.notoriousId === alvo || String(v.mediaId) === alvo
+  );
+}
+
+function acharIdDeCaptionFile(json) {
+  const fortes = [];
+  const fracos = [];
+  const PISTAS = ["url", "language", "locale", "srclang", "kind", "status", "media_id"];
+
+  (function varrer(o, prof) {
+    if (!o || typeof o !== "object" || prof > 5) return;
+    if (Array.isArray(o)) {
+      for (const item of o) varrer(item, prof + 1);
+      return;
+    }
+    const pareceLegenda = PISTAS.some((k) => k in o);
+    for (const k of Object.keys(o)) {
+      const v = o[k];
+      if ((k === "id" || /caption_file_id$/i.test(k)) && (typeof v === "string" || typeof v === "number")) {
+        const s = String(v);
+        if (/^[0-9a-f-]{8,}-\d+$/i.test(s) && !idDeVideoDoAcervo(s)) fortes.push(s);
+        else if (pareceLegenda) fracos.push(s);
+      }
+      if (v && typeof v === "object") varrer(v, prof + 1);
+    }
+  })(json, 0);
+
+  return fortes[0] || fracos[0] || null;
+}
+
+let rotaDeListaPainel = null; // molde que funcionou, reusado nos próximos vídeos
+
+async function descobrirCaptionFile(video, base) {
+  const ids = {
+    "{mediaId}": video.mediaId || "",
+    "{notorious}": video.notoriousId || "",
+    "{launch}": video.ltiLaunchId || "",
+  };
+  const moldes = rotaDeListaPainel
+    ? [rotaDeListaPainel]
+    : [
+        // O prefixo /media/{mediaId}/… existe nesta instância (vimos `annotation_sets` nela),
+        // então é por aqui que a legenda tem mais chance de estar. Os detalhes do vídeo
+        // entram na lista porque costumam trazer os arquivos de legenda embutidos.
+        `${base}/media/{mediaId}/caption_files`,
+        `${base}/media/{mediaId}`,
+        `${base}/media/{mediaId}/captions`,
+        `${base}/media/{notorious}/caption_files`,
+        `${base}/media/{launch}/caption_files`,
+        `${base}/caption_files?media_id={mediaId}`,
+      ];
+
+  for (const molde of moldes) {
+    let url = molde;
+    let completo = true;
+    for (const [marca, valor] of Object.entries(ids)) {
+      if (url.includes(marca)) {
+        if (!valor) {
+          completo = false;
+          break;
+        }
+        url = url.split(marca).join(encodeURIComponent(valor));
+      }
+    }
+    if (!completo) continue;
+
+    try {
+      const res = await fetch(url, { credentials: "include", headers: { Accept: "application/json" } });
+      if (!res.ok) {
+        registrar(`lista de legendas: ${res.status} em ${url}`);
+        continue;
+      }
+      const corpo = await res.text();
+      let json = null;
+      try {
+        json = JSON.parse(corpo);
+      } catch {
+        registrar(`lista de legendas: resposta não é JSON em ${url} :: ${corpo.slice(0, 200)}`);
+        continue;
+      }
+      const id = acharIdDeCaptionFile(json);
+      if (!id) {
+        registrar(`lista de legendas: 200 em ${url}, sem id reconhecível :: ${corpo.slice(0, 400)}`);
+        continue;
+      }
+      rotaDeListaPainel = molde;
+      registrar(`rota da lista de legendas descoberta → ${molde}`);
+      return id;
+    } catch (err) {
+      registrar(`lista de legendas: falha de rede em ${url} :: ${err && err.message}`);
+    }
+  }
+  registrar("nenhuma das rotas de lista de legendas serviu.");
+  return null;
+}
+
+const SEM_ROTA =
+  'Ainda não sei como o Studio entrega a transcrição. Abra um vídeo no Studio e use uma vez ' +
+  'o ⋮ → "Baixar histórico": a extensão aprende o caminho e passa a baixar as outras sozinha.';
+
+// Duas tentativas, nesta ordem: o frame do Studio aberto na aba (tem a sessão em memória)
+// e, se não houver, a chamada direta com o molde aprendido.
+const pedirCaptionFiles = () =>
+  new Promise((r) =>
+    chrome.runtime.sendMessage({ type: "sdv-get-caption-files" }, (resp) => {
+      void chrome.runtime.lastError;
+      r((resp && resp.mapa) || {});
+    })
+  );
+
+const esquecerReceita = () =>
+  new Promise((r) =>
+    chrome.runtime.sendMessage({ type: "sdv-caption-forget" }, () => {
+      void chrome.runtime.lastError;
+      r();
+    })
+  );
+
+// Erro que carrega o endereço tentado — sem ele não dá para saber se o molde aprendido
+// está errado ou se é o vídeo que não tem legenda.
+function erroComUrl(mensagem, url) {
+  const e = new Error(mensagem);
+  e.url = url || null;
+  return e;
+}
+
+async function buscarTranscricao(video) {
+  registrar(`--- "${video.title || video.mediaId}" ---`);
+
+  if (estado.tabId != null) {
+    const r = await pedirLegendaAoStudio(estado.tabId, video);
+    registrar(
+      r
+        ? `frame do Studio respondeu: ok=${!!r.ok} erro=${r.erro || "—"}` +
+            (r.diario ? `\n   ${r.diario}` : "")
+        : "frame do Studio não respondeu (sigo pela chamada direta)"
+    );
+    if (r && r.ok && r.texto) return r.texto;
+    if (r && r.erro && r.erro !== "ainda-nao-aprendido") {
+      throw erroComUrl(r.erro, [r.url, r.diagnostico].filter(Boolean).join("\n"));
+    }
+  }
+
+  const receita = await pedirReceitaLegenda();
+  registrar(receita ? "molde recuperado da sessão" : "nenhum molde guardado");
+  if (!receita) throw new Error(SEM_ROTA);
+  if (receita.inutil) {
+    throw erroComUrl(
+      "O Studio entrega a transcrição por um endereço que identifica o arquivo de legenda, " +
+        "não o vídeo. Com isso não dá para montar o endereço dos outros vídeos — só funcionaria " +
+        "abrindo cada vídeo no player. É uma limitação do Studio, não um erro da extensão.",
+      receita.template
+    );
+  }
+
+  // O id do molde é de um vídeo ou do arquivo de legenda? Se for do arquivo, primeiro
+  // perguntamos ao Studio qual é a legenda deste vídeo.
+  const idsDoMolde = receita.ids || [];
+  const precisaDeCaptionFile = idsDoMolde.length > 0 && !idsDoMolde.some(idDeVideoDoAcervo);
+  registrar(
+    `molde: ${receita.template}\nid do molde: ${idsDoMolde.join(", ") || "—"}\n` +
+      `id deste vídeo: ${video.ltiLaunchId || video.mediaId || "—"}\n` +
+      `o id do molde é de: ${precisaDeCaptionFile ? "ARQUIVO de legenda" : "VÍDEO"}`
+  );
+
+  let captionFileId = null;
+  if (precisaDeCaptionFile) {
+    // 1) O id do próprio molde. Ele veio de um download que funcionou de verdade, e o
+    // sufixo diz a que vídeo pertence — é a fonte mais confiável que existe aqui.
+    const doMolde = idsDoMolde.find((id) => String(id).endsWith(`-${video.mediaId}`));
+    if (doMolde) {
+      captionFileId = doMolde;
+      registrar(`arquivo de legenda pelo molde aprendido: ${doMolde}`);
+    }
+
+    // 2) O que já foi visto passar nas respostas do Studio. Descartamos o que for
+    // identificador de vídeo: isso é lixo colhido antes de o inventário chegar, e foi
+    // exatamente o que fez o download tentar o id errado.
+    if (!captionFileId) {
+      const mapa = await pedirCaptionFiles();
+      const entrada = mapa[String(video.mediaId)] || null;
+      const guardado = entrada && typeof entrada === "object" ? entrada.id : entrada;
+      const origem = entrada && typeof entrada === "object" ? entrada.origem : null;
+
+      if (guardado && idDeVideoDoAcervo(guardado)) {
+        registrar(`ignorando id guardado (é o identificador do vídeo, não da legenda): ${guardado}`);
+      } else if (guardado) {
+        captionFileId = guardado;
+        registrar(`arquivo de legenda já conhecido: ${guardado}${origem ? ` (veio de: ${origem})` : ""}`);
+      } else {
+        registrar(`arquivo de legenda ainda não visto (mapa tem ${Object.keys(mapa).length} vídeo(s))`);
+      }
+    }
+
+    if (!captionFileId) {
+      const base = baseDaApi(receita.template);
+      captionFileId = base ? await descobrirCaptionFile(video, base) : null;
+    }
+    if (!captionFileId) {
+      throw erroComUrl(
+        "Não consegui descobrir o arquivo de legenda deste vídeo: o Studio identifica a " +
+          "transcrição por um id próprio e nenhuma das rotas conhecidas respondeu. " +
+          'Use "Salvar diagnóstico" e me mande o arquivo.',
+        receita.template
+      );
+    }
+  }
+
+  const url = montarUrlLegenda(receita.template, video, captionFileId);
+  if (!url) throw new Error("Este vídeo não tem o identificador que a rota de legenda exige.");
+
+  const res = await fetch(url, {
+    credentials: "include",
+    headers: { Accept: "text/vtt, text/plain, */*" },
+  });
+  registrar(`download: ${res.status} em ${url}`);
+  if (!res.ok) {
+    // Molde errado: apaga, para que o próximo "Baixar histórico" ensine o certo.
+    if (res.status === 404 || res.status === 401 || res.status === 403) await esquecerReceita();
+    throw erroComUrl(
+      res.status === 401 || res.status === 403
+        ? "O Studio recusou a chamada (sessão). Abra o Studio do curso e tente de novo."
+        : `O Studio respondeu ${res.status}.`,
+      url
+    );
+  }
+  return res.text();
+}
+
+// VTT/SRT -> texto corrido. Tira numeração, marcações de tempo e as tags do VTT; a
+// legenda rolante repete a mesma linha em blocos seguidos, então a deduplicamos em sequência.
+// Algumas instâncias entregam a legenda como JSON (lista de trechos) em vez de VTT/SRT.
+function transcricaoDeJson(texto) {
+  let dados;
+  try {
+    dados = JSON.parse(texto);
+  } catch {
+    return null;
+  }
+  // Procura o array de trechos pela FORMA, não pelo nome do campo: o Studio usa
+  // `caption_file.sequences`, mas outra instância pode chamar de outra coisa. O que
+  // identifica a lista é ser um array de objetos com texto.
+  const falaDe = (t) =>
+    t && typeof t === "object" ? t.text ?? t.content ?? t.caption ?? t.body ?? null : null;
+
+  let lista = null;
+  (function varrer(o, prof) {
+    if (lista || !o || typeof o !== "object" || prof > 6) return;
+    if (Array.isArray(o)) {
+      if (o.length && o.every((item) => falaDe(item) != null)) {
+        lista = o;
+        return;
+      }
+      for (const item of o) varrer(item, prof + 1);
+      return;
+    }
+    for (const k of Object.keys(o)) varrer(o[k], prof + 1);
+  })(dados, 0);
+
+  if (!Array.isArray(lista)) return null;
+
+  const falas = [];
+  let anterior = null;
+  for (const trecho of lista) {
+    // Os trechos quebram a frase no meio e trazem quebras de linha internas: normalizar
+    // aqui é o que devolve o texto corrido, igual ao que o player entrega.
+    const fala = String(falaDe(trecho) || "").replace(/\s+/g, " ").trim();
+    if (!fala || fala === anterior) continue;
+    falas.push(fala);
+    anterior = fala;
+  }
+  if (!falas.length) return null;
+  return falas.join(" ").replace(/\s{2,}/g, " ").replace(/([.!?])\s+/g, "$1\n").trim();
+}
+
+function transcricaoEmTexto(bruto) {
+  const cru = String(bruto || "").trim();
+  if (cru.startsWith("{") || cru.startsWith("[")) {
+    const doJson = transcricaoDeJson(cru);
+    if (doJson) return doJson;
+  }
+
+  const saida = [];
+  let anterior = null;
+  for (const linhaBruta of String(bruto || "").replace(/\r/g, "").split("\n")) {
+    let linha = linhaBruta.trim();
+    if (!linha) continue;
+    if (/^WEBVTT/i.test(linha)) continue;
+    if (/^(NOTE|STYLE|REGION)\b/i.test(linha)) continue;
+    if (/^\d+$/.test(linha)) continue; // numeração do bloco no SRT
+    if (linha.includes("-->")) continue; // marcação de tempo
+    linha = linha.replace(/<[^>]+>/g, "").trim(); // tags de realce do VTT
+    if (!linha || linha === anterior) continue;
+    saida.push(linha);
+    anterior = linha;
+  }
+  // Uma frase por linha lê melhor num .txt do que um parágrafo único.
+  return saida.join(" ").replace(/\s{2,}/g, " ").replace(/([.!?])\s+/g, "$1\n").trim();
+}
+
+// Busca, converte e grava a transcrição de um vídeo. Compartilhada pelo botão de cada
+// vídeo e pelo download em lote de um módulo.
+async function gravarTranscricao(video) {
+  const bruto = await buscarTranscricao(video);
+  const texto = transcricaoEmTexto(bruto);
+  if (!texto) throw new Error("A transcrição veio vazia — o vídeo pode não ter legenda.");
+
+  const cabecalho =
+    `${video.title || "(sem título)"}\n` +
+    `Duração: ${sdvFormatRelogio(video.duration)}\n` +
+    `ID da mídia: ${video.mediaId}\n` +
+    "".padEnd(60, "-") + "\n\n";
+
+  await baixarBlob(
+    new Blob([cabecalho + texto], { type: "text/plain;charset=utf-8" }),
+    `transcricao-${slug(video.title || video.mediaId)}.txt`
+  );
+}
+
+// Os módulos do curso e os vídeos de cada um. Um vídeo que aparece em dois módulos entra
+// nos dois; dentro de um módulo ele entra uma vez só.
+function modulosComVideos() {
+  const r = estado.analise && estado.analise.resultado;
+  if (!r) return [];
+  const porModulo = new Map();
+  for (const video of r.usados) {
+    for (const nome of new Set((video.locais || []).map((l) => l.modulo || "(sem módulo)"))) {
+      if (!porModulo.has(nome)) porModulo.set(nome, []);
+      const lista = porModulo.get(nome);
+      if (!lista.some((v) => String(v.mediaId) === String(video.mediaId))) lista.push(video);
+    }
+  }
+  return [...porModulo.entries()].map(([nome, videos]) => ({ nome, videos }));
+}
+
+async function baixarLoteDoModulo(indice, botao) {
+  const modulo = modulosComVideos()[indice];
+  if (!modulo) return;
+
+  const rotulo = botao.textContent;
+  botao.disabled = true;
+  mostrarAvisoTranscricao("");
+  registrar(`=== lote do módulo "${modulo.nome}" (${modulo.videos.length} vídeo(s)) ===`);
+
+  const falhas = [];
+  for (let i = 0; i < modulo.videos.length; i++) {
+    const video = modulo.videos[i];
+    botao.textContent = `Baixando ${i + 1} de ${modulo.videos.length}…`;
+    try {
+      await gravarTranscricao(video);
+    } catch (e) {
+      falhas.push(`${video.title || video.mediaId}: ${(e && e.message) || e}`);
+    }
+    // Uma pausa curta entre downloads: o Chrome bloqueia rajadas de gravação.
+    if (i < modulo.videos.length - 1) await new Promise((r) => setTimeout(r, 400));
+  }
+
+  const ok = modulo.videos.length - falhas.length;
+  botao.textContent = falhas.length ? `${ok} de ${modulo.videos.length} baixados` : `✅ ${ok} baixados`;
+  if (falhas.length) mostrarAvisoTranscricao(`Não deu para baixar: ${falhas.join(" · ")}`);
+  setTimeout(() => {
+    botao.textContent = rotulo;
+    botao.disabled = false;
+  }, 4000);
+}
+
+async function baixarTranscricao(mediaId, botao) {
+  const r = estado.analise && estado.analise.resultado;
+  // Os dois grupos: o botão existe nas duas listas, e a transcrição de um vídeo não depende
+  // de ele estar num módulo. Procurar só em `usados` fazia o clique não fazer nada.
+  const video =
+    r && [...r.usados, ...r.naoUsados].find((v) => String(v.mediaId) === String(mediaId));
+  if (!video) return;
+
+  const original = botao.textContent;
+  botao.disabled = true;
+  botao.textContent = "…";
+  mostrarAvisoTranscricao(""); // o erro anterior não vale mais para esta tentativa
+
+  try {
+    await gravarTranscricao(video);
+    botao.textContent = "✅";
+    setTimeout(() => {
+      botao.textContent = original;
+      botao.disabled = false;
+    }, 2000);
+  } catch (e) {
+    const mensagem = String((e && e.message) || e);
+    botao.textContent = "⚠️";
+    botao.disabled = false;
+    botao.title = mensagem;
+    mostrarAvisoTranscricao(mensagem, e && e.url);
+    setTimeout(() => (botao.textContent = original), 3000);
+  }
+}
+
+// Um aviso só, no rodapé do cartão da análise — a mensagem que explica como ensinar a
+// rota à extensão é longa demais para caber num tooltip.
+function mostrarAvisoTranscricao(texto, url) {
+  const caixa = document.getElementById("aviso-tx");
+  if (!caixa) return;
+  caixa.textContent = "";
+  caixa.hidden = !texto;
+  if (!texto) return;
+
+  caixa.append(texto);
+  // O endereço tentado é a informação que resolve o diagnóstico: mostra se o molde
+  // aprendido está errado ou se é o vídeo que não tem legenda.
+  if (url) {
+    const linha = document.createElement("span");
+    linha.className = "url-tentada";
+    linha.textContent = url; // pode trazer o endereço e, abaixo, a comparação dos ids
+    caixa.append(document.createElement("br"), "Endereço tentado:", document.createElement("br"), linha);
+  }
 }
 
 // --- exportação para Excel ----------------------------------------------------
@@ -560,21 +1138,47 @@ function abasDaPlanilha(r) {
   ];
 }
 
+// Texto -> peda\u00e7o seguro de nome de arquivo (sem acento, sem espa\u00e7o, sem barra).
+function slug(texto, max = 48) {
+  const limpo = String(texto || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^A-Za-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase();
+  if (limpo.length <= max) return limpo || "sem-nome";
+  // Corta no \u00faltimo h\u00edfen antes do limite: nome truncado no meio da palavra fica ileg\u00edvel.
+  const cortado = limpo.slice(0, max);
+  const ultimo = cortado.lastIndexOf("-");
+  return (ultimo > max * 0.6 ? cortado.slice(0, ultimo) : cortado) || "sem-nome";
+}
+
+// Entrega o arquivo ao usu\u00e1rio. Usa chrome.downloads quando h\u00e1 permiss\u00e3o; numa p\u00e1gina de
+// extens\u00e3o a \u00e2ncora comum tamb\u00e9m resolve.
+async function baixarBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  try {
+    if (chrome.downloads && chrome.downloads.download) {
+      await chrome.downloads.download({ url, filename });
+    } else {
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+    }
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+}
+
 function nomeDoArquivo() {
   const curso =
     (estado.colecao && estado.colecao.courseName) ||
     (estado.inventario && estado.inventario.courseName) ||
     estado.courseId ||
     "curso";
-  const limpo = String(curso)
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^A-Za-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 40)
-    .toLowerCase();
   const hoje = new Date().toISOString().slice(0, 10);
-  return `videos-${limpo || "curso"}-${hoje}.xlsx`;
+  return `videos-${slug(curso)}-${hoje}.xlsx`;
 }
 
 async function baixarPlanilha() {
@@ -582,27 +1186,14 @@ async function baixarPlanilha() {
   const r = estado.analise && estado.analise.resultado;
   if (!r) return;
 
-  let url = null;
   try {
-    url = URL.createObjectURL(sdvGerarXlsx(abasDaPlanilha(r)));
-    const filename = nomeDoArquivo();
-    if (chrome.downloads && chrome.downloads.download) {
-      await chrome.downloads.download({ url, filename });
-    } else {
-      // Sem a permissão de downloads: âncora comum resolve numa página de extensão.
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      a.click();
-    }
+    await baixarBlob(sdvGerarXlsx(abasDaPlanilha(r)), nomeDoArquivo());
     if (botao) {
       botao.textContent = "✅ Planilha baixada";
       setTimeout(() => (botao.textContent = "Baixar planilha (.xlsx)"), 2500);
     }
   } catch (e) {
     if (botao) botao.textContent = "Falha ao gerar a planilha";
-  } finally {
-    if (url) setTimeout(() => URL.revokeObjectURL(url), 60000);
   }
 }
 
