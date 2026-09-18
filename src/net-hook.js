@@ -109,6 +109,48 @@
     return s;
   }
 
+  // --- datas do vídeo ---------------------------------------------------------
+  // São DUAS datas diferentes, e confundi-las daria um catálogo errado:
+  //
+  //   • a da MÍDIA  (`tile.data.media`) — quando o vídeo entrou no Studio, ou seja, quando
+  //     foi enviado/gravado pela ferramenta. É a que não muda mais.
+  //   • a do TILE   (`tile.data`)       — quando ESSA mídia foi posta NESTA coleção. Um vídeo
+  //     de março pode entrar numa coleção em agosto, e ser reaproveitado em outra depois.
+  //
+  // Nenhuma das duas é "quando o vídeo foi publicado numa página do Canvas": isso o Studio
+  // não sabe, quem sabe é o Canvas (e só de forma aproximada — ver README).
+  //
+  // Que o campo existe é certo: a grade é pedida com `sort_by=created_at` (ver
+  // docs/automacao-embed-studio-em-paginas.md §4.1), e um servidor não ordena pelo que não
+  // tem. O que não se sabe é COMO ele se chama aqui — por isso procuramos os nomes plausíveis
+  // em cada uma das duas fontes, separadamente, em vez de fixar um.
+  const CAMPOS_DA_MIDIA = ["published_at", "created_at", "uploaded_at", "publish_at", "recorded_at"];
+  const CAMPOS_DO_TILE = ["added_at", "inserted_at", "attached_at", "created_at"];
+
+  const camposDeDataVistos = new Set();
+
+  // ISO cru (a formatação fica no painel, no fuso do usuário) ou null.
+  function primeiraData(fonte, campos, rotulo) {
+    if (!fonte || typeof fonte !== "object") return null;
+    for (const campo of campos) {
+      const valor = fonte[campo];
+      if (typeof valor !== "string") continue; // epoch numérico seria ambíguo (s ou ms)
+      const t = new Date(valor);
+      const ano = t.getFullYear();
+      // Sanidade: o que não vira data plausível é outro campo com nome parecido.
+      if (isNaN(t.getTime()) || ano < 2000 || ano > 2100) continue;
+      // Dizer de onde veio cada data é o que permite responder, sem adivinhar, se o que está
+      // no catálogo é a entrada no Studio ou a entrada na coleção.
+      const marca = `${rotulo}:${campo}`;
+      if (!camposDeDataVistos.has(marca)) {
+        camposDeDataVistos.add(marca);
+        console.info(`${LOG} data ${rotulo} lida do campo "${campo}".`);
+      }
+      return t.toISOString();
+    }
+    return null;
+  }
+
   // --- leitura da resposta `tiles` --------------------------------------------
   // Formato: { tiles: [ { data: { collection: {id}, media: { id, duration } } } ], meta: {…} }
   function readTiles(json) {
@@ -143,6 +185,10 @@
         notoriousId: media.notorious_id || null,
         mediaId: media.id != null ? String(media.id) : null,
         title: data.title || media.title || null,
+        // Quando a instância informa: a data em que o vídeo entrou no Studio…
+        createdAt: primeiraData(media, CAMPOS_DA_MIDIA, "do vídeo no Studio"),
+        // …e a data em que ele foi posto nesta coleção, que pode ser bem outra.
+        addedAt: primeiraData(data, CAMPOS_DO_TILE, "de entrada na coleção"),
       });
     }
 
@@ -178,6 +224,8 @@
           notoriousId: item.notoriousId,
           title: item.title,
           duration: item.duration,
+          createdAt: item.createdAt,
+          addedAt: item.addedAt,
         });
       }
       if (typeof item.duration === "number" && item.duration > 0) {

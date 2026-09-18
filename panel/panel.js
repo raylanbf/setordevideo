@@ -88,6 +88,35 @@ function linkDoVideo(v) {
   );
 }
 
+// As duas datas do vídeo, que respondem a perguntas diferentes (ver net-hook.js):
+//   • upload  (`createdAt`) — quando o vídeo entrou no Studio. É a identidade da gravação.
+//   • coleção (`addedAt`)   — quando ele foi posto NESTA coleção.
+// Um vídeo reaproveitado tem as duas bem distantes, e é justamente aí que a diferença importa.
+// O inventário guarda o ISO cru como o Studio mandou; a conversão para o fuso do usuário
+// acontece só aqui. Nem toda instância informa data, então tudo que depende delas aceita `null`.
+function dataValida(cru) {
+  const t = cru ? new Date(cru) : null;
+  return t && !isNaN(t.getTime()) ? t : null;
+}
+
+const dataDeUpload = (v) => dataValida(v && v.createdAt);
+const dataNaColecao = (v) => dataValida(v && v.addedAt);
+
+const emDiaMesAno = (t) => (t ? t.toLocaleDateString("pt-BR") : null);
+
+// Uma linha com as datas que existirem. Quando as duas caem no mesmo dia — o caso comum, de
+// vídeo enviado direto para a coleção — repetir a data seria ruído: basta uma, sem rótulo.
+// Os rótulos aparecem quando elas divergem, que é quando há algo a dizer.
+function datasEmTexto(v) {
+  const upload = emDiaMesAno(dataDeUpload(v));
+  const colecao = emDiaMesAno(dataNaColecao(v));
+  if (upload && colecao) {
+    return upload === colecao ? upload : `enviado ${upload} · na coleção ${colecao}`;
+  }
+  if (upload) return upload;
+  return colecao ? `na coleção ${colecao}` : null;
+}
+
 // O acervo pode vir de dois lugares. Com o Studio aberto na aba, a resposta ao vivo do
 // content script é a fonte melhor (mais recente e sem depender de gravação); fora dele,
 // vale o que ficou guardado na sessão.
@@ -290,7 +319,9 @@ function listaVideos(videos, mostrarOnde, comTranscricao = false) {
           }</div>
           ${baixar}
         </div>
-        <div class="vd">${dur ? esc(dur) : "duração desconhecida"}</div>
+        <div class="vd">${dur ? esc(dur) : "duração desconhecida"}${
+          datasEmTexto(v) ? ` · ${esc(datasEmTexto(v))}` : ""
+        }</div>
         ${onde}
       </li>`;
     })
@@ -594,6 +625,8 @@ function textoDoDiagnostico() {
     ...a.videos.map(
       (v) =>
         `  - ${v.title || "(sem título)"} | mediaId=${v.mediaId || "—"} | ` +
+        // As duas datas, separadas: é assim que se sabe qual delas o catálogo está usando.
+        `noStudio=${v.createdAt || "—"} | naColecao=${v.addedAt || "—"} | ` +
         `launch=${v.ltiLaunchId || "—"} | notorious=${v.notoriousId || "—"}`
     ),
     "",
@@ -955,6 +988,12 @@ async function gravarTranscricao(video) {
   const cabecalho =
     `${video.title || "(sem título)"}\n` +
     `Duração: ${sdvFormatRelogio(video.duration)}\n` +
+    (emDiaMesAno(dataDeUpload(video))
+      ? `Enviado ao Studio: ${emDiaMesAno(dataDeUpload(video))}\n`
+      : "") +
+    (emDiaMesAno(dataNaColecao(video))
+      ? `Adicionado à coleção: ${emDiaMesAno(dataNaColecao(video))}\n`
+      : "") +
     `ID da mídia: ${video.mediaId}\n` +
     "".padEnd(60, "-") + "\n\n";
 
@@ -1080,6 +1119,9 @@ function abasDaPlanilha(r) {
     v.title || "(sem título)",
     sdvFormatRelogio(v.duration),
     minutos(v.duration),
+    // Date vira data de verdade na planilha (ordenável); "" quando o Studio não informa.
+    dataDeUpload(v) || "",
+    dataNaColecao(v) || "",
     unicos((v.locais || []).map((l) => l.titulo || l.tipo)).join(" | "),
     unicos((v.locais || []).map((l) => l.modulo)).join(" | "),
     unicos((v.locais || []).map((l) => l.tipo)).join(" | "),
@@ -1091,19 +1133,23 @@ function abasDaPlanilha(r) {
     `TOTAL — ${r.usados.length} vídeo${r.usados.length === 1 ? "" : "s"}`,
     sdvFormatRelogio(r.segUsados),
     minutos(r.segUsados),
-    "", "", "", "", "", "",
+    "", "", "", "", "", "", "", "",
   ]);
 
   const naoAlocados = r.naoUsados.map((v) => [
     v.title || "(sem título)",
     sdvFormatRelogio(v.duration),
     minutos(v.duration),
+    dataDeUpload(v) || "",
+    dataNaColecao(v) || "",
     v.mediaId || "",
   ]);
   naoAlocados.push([
     `TOTAL — ${r.naoUsados.length} vídeo${r.naoUsados.length === 1 ? "" : "s"}`,
     sdvFormatRelogio(r.segNaoUsados),
     minutos(r.segNaoUsados),
+    "",
+    "",
     "",
   ]);
 
@@ -1115,6 +1161,8 @@ function abasDaPlanilha(r) {
         { titulo: "Vídeo", largura: 46 },
         { titulo: "Duração", largura: 11 },
         { titulo: "Minutos", largura: 10 },
+        { titulo: "Enviado ao Studio", largura: 16 },
+        { titulo: "Adicionado à coleção", largura: 19 },
         { titulo: "Onde está (item)", largura: 40 },
         { titulo: "Módulo", largura: 30 },
         { titulo: "Tipo do item", largura: 14 },
@@ -1131,6 +1179,8 @@ function abasDaPlanilha(r) {
         { titulo: "Vídeo", largura: 46 },
         { titulo: "Duração", largura: 11 },
         { titulo: "Minutos", largura: 10 },
+        { titulo: "Enviado ao Studio", largura: 16 },
+        { titulo: "Adicionado à coleção", largura: 19 },
         { titulo: "ID da mídia", largura: 14 },
       ],
       linhas: naoAlocados,

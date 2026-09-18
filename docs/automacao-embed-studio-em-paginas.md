@@ -163,12 +163,36 @@ Resposta: `{ tiles: [ { item_type, data: {…} }, … ], meta: {…} }`.
 | ID numérico da mídia | `data.media.id` | `260854` |
 | Miniatura (capa) | `data.media.thumbnail_url` | `https://nv.instructuremedia.com/api/media/m-4fA1…/thumbnail?width=540&height=320` |
 | Duração (segundos) | `data.media.duration` | `1005` |
+| Data do vídeo no Studio | `data.media.created_at` (ver nota) | `2020-03-02T18:38:40Z` |
+| Data de entrada na coleção | `data.added_at` (ver nota) | — |
 | Tem legendas? | `data.has_captions` | `true` |
 | `notorious_id` (id interno de mídia) | `data.media.notorious_id` | `m-4fA1ZYHU6PpDA51NxBbJxVJ6eEcDPDKP` |
 | Coleção (id/nome/tipo) | `data.collection.{id,name,type}` | `586827` / "Ambiente teste - Raylan" / `course_wide` |
 
 > **`lti_launch_id` = `{uuid}-{media.id}`** e é **exatamente** o `custom_arc_media_id` do embed
 > (§2). Basta ler e injetar no molde (§3) — nada a montar.
+
+> **Nota sobre as datas — são duas, e não significam a mesma coisa.**
+>
+> - **`data.media.*`** → quando o vídeo entrou no **Studio** (upload/gravação). É a identidade
+>   da mídia: não muda se ela for reaproveitada.
+> - **`data.*`** (o tile) → quando essa mídia foi posta **nesta coleção**. Um vídeo de março
+>   pode entrar numa coleção em agosto e em outra no ano seguinte.
+>
+> Nenhuma das duas é "quando o vídeo foi publicado numa página do Canvas" — isso o Studio não
+> sabe; o Canvas sabe, e só de forma aproximada (ver §4.3 e o README).
+>
+> Que o campo existe é certo: a própria chamada da grade pede `sort_by=created_at`, e um
+> servidor não ordena pelo que não tem. O que não se sabe de antemão é como ele se chama nesta
+> instância — por isso o `net-hook` procura nomes plausíveis em **cada fonte separadamente**:
+> `published_at`, `created_at`, `uploaded_at`, `publish_at`, `recorded_at` na mídia;
+> `added_at`, `inserted_at`, `attached_at`, `created_at` no tile. Vale o primeiro que vira data
+> plausível (ano entre 2000 e 2100); epoch numérico é ignorado, por ser ambíguo entre segundos
+> e milissegundos. Ao achar, imprime no console do frame do Studio de onde veio —
+> `[SDV] data do vídeo no Studio lida do campo "…"` / `[SDV] data de entrada na coleção lida do
+> campo "…"` — e o diagnóstico do painel traz as duas por vídeo (`noStudio=`, `naColecao=`).
+> Se nada servir, as datas ficam vazias e todo o resto continua funcionando. Ver
+> `primeiraData()` em [net-hook.js](../src/net-hook.js).
 
 **Paginação:** vem em `meta`:
 ```json

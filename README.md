@@ -22,6 +22,9 @@ módulos — então o tempo publicado é menor que o tempo do acervo.
 - **Soma a duração de todos os vídeos da coleção**, inclusive os que ainda não apareceram na
   grade: a listagem do Studio é paginada (20 por página) e a extensão percorre as restantes.
   Enquanto a soma não cobre tudo, o número aparece com **`+`**.
+- **Mostra as datas de cada vídeo** ao lado da duração: quando foi **enviado ao Studio** e
+  quando foi **adicionado à coleção**. As duas separadas, porque um vídeo reaproveitado tem
+  datas diferentes. Instância que não informa a data simplesmente não a exibe.
 - **Analisa os módulos do curso** e separa o acervo em três números: *usados nos módulos*,
   *sem uso* e *nos módulos, de outra coleção*.
 - **Abre o Studio do curso** por um botão do painel, usando o link que já existe na navegação
@@ -62,11 +65,31 @@ quando o Chrome é fechado.
 
 | Aba | Colunas |
 |---|---|
-| **Vídeos alocados** | Vídeo, Duração, Minutos, Onde está (item), Módulo, Tipo do item, Como foi inserido, Item publicado, ID da mídia |
-| **Vídeos não alocados** | Vídeo, Duração, Minutos, ID da mídia |
+| **Vídeos alocados** | Vídeo, Duração, Minutos, Enviado ao Studio, Adicionado à coleção, Onde está (item), Módulo, Tipo do item, Como foi inserido, Item publicado, ID da mídia |
+| **Vídeos não alocados** | Vídeo, Duração, Minutos, Enviado ao Studio, Adicionado à coleção, ID da mídia |
 
-A coluna *Minutos* é numérica, então dá para somar e montar tabela dinâmica direto no Excel.
-Cada aba fecha com uma linha de TOTAL.
+A coluna *Minutos* é numérica e as duas de data são data de verdade (não texto), então dá para
+somar, ordenar por período e montar tabela dinâmica direto no Excel. Cada aba fecha com uma
+linha de TOTAL.
+
+### As duas datas
+
+O Studio guarda duas datas para cada vídeo, e elas respondem a perguntas diferentes:
+
+| Coluna | O que é |
+|---|---|
+| **Enviado ao Studio** | quando a gravação entrou na biblioteca. É a identidade do vídeo: não muda se ele for reaproveitado. |
+| **Adicionado à coleção** | quando esse vídeo foi posto **nesta** coleção. |
+
+É por isso que elas aparecem separadas: um vídeo gravado em março pode entrar numa coleção em
+agosto e em outra no semestre seguinte — com uma data só, o reaproveitamento some. Nas listas
+do painel, quando as duas caem no mesmo dia (o caso comum) aparece só uma; quando divergem,
+aparecem as duas: `enviado 15/03/2024 · na coleção 01/08/2024`.
+
+> Nenhuma das duas é "quando o vídeo foi publicado numa página do Canvas" — isso o Studio não
+> sabe. Instâncias que não informem alguma das datas deixam a coluna vazia; o resto não muda.
+> Para ver de qual campo cada data saiu, use *Salvar diagnóstico* (`noStudio=` e `naColecao=`)
+> ou o console do frame do Studio.
 
 6. **Transcrição dos vídeos.** Cada vídeo das listas ganha um botão **📄** que baixa a
 transcrição em `.txt` — o mesmo texto que o player entrega no menu ⋮ → **"Baixar histórico"**
@@ -93,9 +116,9 @@ o progresso no botão. Se algum falhar, os outros continuam e o painel diz quais
   chave de integração). A extensão **não usa nem armazena** esse token; ela apenas decodifica, **em
   memória**, os campos `lti_course_id`, `canvas_domain` e o nome do curso para exibir o mapeamento
   Studio ↔ Canvas. E-mail, user_id e oauth_key **nunca** são lidos nem gravados.
-- A contagem de vídeos e as durações vêm de "escutar" a chamada de listagem que o próprio Studio
-  já faz (endpoint `tiles`), autenticada pela **sua sessão** — **não** usa nem requer chave de
-  API do Studio.
+- A contagem de vídeos, as durações e as datas vêm de "escutar" a chamada de listagem que o
+  próprio Studio já faz (endpoint `tiles`), autenticada pela **sua sessão** — **não** usa nem
+  requer chave de API do Studio.
 - Como essa listagem é **paginada**, para somar a coleção inteira a extensão **repete essa mesma
   chamada de leitura** (`GET`) para as páginas restantes, no próprio servidor do Studio e com a
   sua sessão. Teto de segurança: 50 páginas (1000 vídeos).

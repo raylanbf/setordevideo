@@ -14,7 +14,7 @@ Nenhuma informação é enviada para o desenvolvedor nem para terceiros.
 - É executada nas páginas do **Canvas Studio** (domínio `instructuremedia.com`) e, quando o
   usuário autoriza, lê dados do curso no **Canvas** (domínio `instructure.com`).
 - Lê o identificador (ID) da coleção que **já está presente na URL** da página e, da listagem
-  que o próprio Studio carrega, o título e a duração de cada vídeo, para mostrar ao usuário
+  que o próprio Studio carrega, o título, a duração e as datas de cada vídeo, para mostrar ao usuário
   quantos vídeos existem e quanto tempo somam.
 - Para que a duração corresponda à coleção inteira (a listagem do Studio vem em páginas de 20
   vídeos), a extensão **repete a mesma consulta de leitura do Studio** para as páginas restantes,
@@ -43,7 +43,7 @@ Nenhuma informação é enviada para o desenvolvedor nem para terceiros.
 ## Armazenamento
 
 - A extensão **não grava nada em disco** e não usa cookies próprios.
-- A lista de vídeos da coleção (título, duração e identificador) é mantida em
+- A lista de vídeos da coleção (título, duração, datas e identificador) é mantida em
   `chrome.storage.session`, que é **memória do navegador**: não é escrita em disco e é
   descartada quando o Chrome é fechado. Ela existe apenas para que o painel consiga comparar a
   coleção com os módulos depois que o usuário sai da página do Studio.

@@ -6,7 +6,8 @@
 //   const blob = sdvGerarXlsx([
 //     { nome: "Alocados", colunas: [{ titulo: "Vídeo", largura: 46 }, …], linhas: [[…], …] },
 //   ]);
-// Strings viram texto; números viram célula numérica (dá para somar no Excel).
+// Strings viram texto; números viram célula numérica (dá para somar no Excel); um `Date`
+// vira data de verdade (dá para ordenar e filtrar por período).
 
 // --- ZIP ---------------------------------------------------------------------
 const SDV_CRC_TABELA = (() => {
@@ -112,8 +113,21 @@ function sdvNomeDeAba(nome, indice) {
   return limpo.slice(0, 31) || `Planilha${indice + 1}`;
 }
 
+// Data -> número de série do Excel (dias desde 1899-12-30). Usamos os componentes LOCAIS
+// da data: o que vai para a planilha é o dia que o usuário vê na tela, sem deslocamento de
+// fuso na virada da meia-noite.
+function sdvSerialDeData(d) {
+  return Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86400000 + 25569;
+}
+
 function sdvCelula(ref, valor, negrito) {
   const estilo = negrito ? ' s="1"' : "";
+  // Uma data é número + formato: assim o Excel ordena e filtra por data de verdade, em vez
+  // de comparar textos. O estilo 2 carrega o formato de data curta do sistema (numFmt 14),
+  // e por isso vence o negrito — a linha de TOTAL não tem data.
+  if (valor instanceof Date && !isNaN(valor.getTime())) {
+    return `<c r="${ref}" s="2"><v>${sdvSerialDeData(valor)}</v></c>`;
+  }
   if (typeof valor === "number" && isFinite(valor)) {
     return `<c r="${ref}"${estilo}><v>${valor}</v></c>`;
   }
@@ -218,8 +232,10 @@ function sdvGerarXlsx(abas) {
         `<fill><patternFill patternType="gray125"/></fill></fills>` +
         `<borders count="1"><border/></borders>` +
         `<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>` +
-        `<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>` +
-        `<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs>` +
+        `<cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>` +
+        `<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>` +
+        // numFmt 14 = data curta; o Excel a exibe no formato do sistema (dd/mm/aaaa no Brasil).
+        `<xf numFmtId="14" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs>` +
         `</styleSheet>`,
     },
   ];
