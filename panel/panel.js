@@ -1698,6 +1698,15 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg && msg.type === "sdv-inventory-updated") atualizarDados();
 });
 
+// Versão no cabeçalho: sai do manifest, para não haver um segundo número a lembrar
+// de atualizar na hora de publicar. Serve para conferir qual build está carregado.
+(() => {
+  const versao = chrome.runtime.getManifest().version;
+  const alvo = document.getElementById("versao");
+  alvo.textContent = "v" + versao;
+  alvo.title = "Versão " + versao + " da extensão";
+})();
+
 document.getElementById("recarregar").addEventListener("click", recarregar);
 chrome.tabs.onActivated.addListener(recarregar);
 chrome.tabs.onUpdated.addListener((_tabId, info, tab) => {

@@ -54,6 +54,20 @@
       @media (prefers-color-scheme: dark) {
         header { background: #2b2f36; color: var(--texto); }
       }
+      header .titulo { display: flex; align-items: center; gap: 6px; min-width: 0; }
+      header .versao {
+        flex: none;
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: .3px;
+        background: rgba(255, 255, 255, .18);
+        border-radius: 999px;
+        padding: 2px 6px;
+        white-space: nowrap;
+      }
+      @media (prefers-color-scheme: dark) {
+        header .versao { background: rgba(255, 255, 255, .10); color: var(--fraco); }
+      }
       header button {
         background: rgba(255, 255, 255, .18);
         color: inherit;
@@ -206,7 +220,10 @@
   </head>
   <body>
     <header>
-      <span>Setor de Vídeo — Studio</span>
+      <span class="titulo">
+        Setor de Vídeo — Studio
+        <span class="versao" id="versao"></span>
+      </span>
       <button id="recarregar" title="Atualizar">↻</button>
     </header>
     <main id="content"></main>
