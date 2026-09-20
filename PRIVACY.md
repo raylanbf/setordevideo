@@ -14,7 +14,7 @@ Nenhuma informação é enviada para o desenvolvedor nem para terceiros.
 - É executada nas páginas do **Canvas Studio** (domínio `instructuremedia.com`) e, quando o
   usuário autoriza, lê dados do curso no **Canvas** (domínio `instructure.com`).
 - Lê o identificador (ID) da coleção que **já está presente na URL** da página e, da listagem
-  que o próprio Studio carrega, o título, a duração e as datas de cada vídeo, para mostrar ao usuário
+  que o próprio Studio carrega, o título, a duração e a data de cada vídeo, para mostrar ao usuário
   quantos vídeos existem e quanto tempo somam.
 - Para que a duração corresponda à coleção inteira (a listagem do Studio vem em páginas de 20
   vídeos), a extensão **repete a mesma consulta de leitura do Studio** para as páginas restantes,
@@ -43,7 +43,7 @@ Nenhuma informação é enviada para o desenvolvedor nem para terceiros.
 ## Armazenamento
 
 - A extensão **não grava nada em disco** e não usa cookies próprios.
-- A lista de vídeos da coleção (título, duração, datas e identificador) é mantida em
+- A lista de vídeos da coleção (título, duração e identificador) é mantida em
   `chrome.storage.session`, que é **memória do navegador**: não é escrita em disco e é
   descartada quando o Chrome é fechado. Ela existe apenas para que o painel consiga comparar a
   coleção com os módulos depois que o usuário sai da página do Studio.
@@ -71,6 +71,13 @@ Nenhuma informação é enviada para o desenvolvedor nem para terceiros.
 - **Acesso a `instructure.com` (opcional)** — solicitado somente quando o usuário clica em
   "Analisar módulos", para ler os módulos e o conteúdo do curso em busca dos vídeos
   incorporados. Se o usuário negar, todo o restante da extensão continua funcionando.
+- **Acesso a um site à escolha do usuário (opcional)** — solicitado somente quando ele clica em
+  **"Preencher"** na função de catalogação, e **apenas para o site que estiver aberto naquela
+  aba**. Serve para escrever, nos campos do formulário de cadastro, o nome, o link e a duração
+  do vídeo que o usuário escolheu. A extensão **não lê** o conteúdo dessa página, não a envia a
+  lugar nenhum e não age em nenhum outro site — o Chrome pede a autorização site a site, e
+  negá-la não afeta o resto da extensão. Páginas locais (`file://`) exigem, além disso, que o
+  usuário ligue manualmente "Permitir acesso a URLs de arquivo" nas opções da extensão.
 
 ## Contato
 
