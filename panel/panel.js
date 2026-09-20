@@ -142,161 +142,6 @@ function acharLinkDoStudio() {
   return alvo ? alvo.href : null;
 }
 
-// --- preencher o formulário de catálogo de outra plataforma -------------------
-// Injetada na aba onde o formulário está aberto (chrome.scripting.executeScript), então
-// precisa ser autossuficiente: nada aqui pode depender do resto deste arquivo.
-//
-// Os campos são localizados pelo TEXTO DO RÓTULO, não por id ou classe: é o único jeito de
-// sobreviver a uma mudança de layout da outra plataforma, e o rótulo é o que a pessoa lê.
-function sdvPreencherFormulario(dados) {
-  const norm = (s) =>
-    String(s || "")
-      .normalize("NFD")
-      .replace(/[̀-ͯ]/g, "")
-      .toLowerCase()
-      .replace(/[*:]/g, " ")
-      .replace(/[^a-z0-9]+/g, " ")
-      .trim();
-
-  // O rótulo de um campo, procurado em ordem de confiabilidade.
-  function rotuloDe(el) {
-    const aria = el.getAttribute("aria-label");
-    if (aria) return aria;
-
-    if (el.id) {
-      try {
-        const l = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
-        if (l && l.textContent.trim()) return l.textContent;
-      } catch {
-        /* id exótico: segue para as outras formas */
-      }
-    }
-
-    const ancestral = el.closest("label");
-    if (ancestral && ancestral.textContent.trim()) return ancestral.textContent;
-
-    // Texto imediatamente antes do campo — o caso do formulário em questão, em que o
-    // rótulo é uma <div> acima do input.
-    for (let no = el.previousElementSibling; no; no = no.previousElementSibling) {
-      const t = (no.textContent || "").trim();
-      if (t) return t;
-    }
-    const pai = el.parentElement;
-    if (pai) {
-      for (let no = pai.previousElementSibling; no; no = no.previousElementSibling) {
-        const t = (no.textContent || "").trim();
-        if (t) return t;
-      }
-    }
-    return el.placeholder || el.name || "";
-  }
-
-  // Escrever em `.value` direto não basta: React e Vue guardam o próprio estado e
-  // sobrescrevem na renderização seguinte. O setter nativo + os eventos fazem o
-  // framework enxergar a digitação como se fosse do usuário.
-  function escrever(el, valor) {
-    const proto =
-      el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-    const setter = Object.getOwnPropertyDescriptor(proto, "value");
-    if (setter && setter.set) setter.set.call(el, String(valor));
-    else el.value = String(valor);
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    el.dispatchEvent(new Event("change", { bubbles: true }));
-  }
-
-  // `offsetParent` é null em elementos com position:fixed mesmo quando estão visíveis —
-  // usá-lo como teste de visibilidade descartaria o formulário inteiro em alguns layouts.
-  const visivel = (el) => el.getClientRects().length > 0;
-  const campos = Array.from(document.querySelectorAll("input, textarea")).filter(
-    (el) => !el.disabled && !el.readOnly && el.type !== "hidden" && visivel(el)
-  );
-  const comRotulo = campos.map((el) => ({ el, rotulo: norm(rotuloDe(el)) }));
-
-  // Casa o rótulo inteiro primeiro e só então o começo dele: "Nome do Vídeo" não pode
-  // ganhar de "Descrição do Vídeo" por acaso.
-  function achar(alvos, usados) {
-    for (const alvo of alvos) {
-      const exato = comRotulo.find((c) => !usados.has(c.el) && c.rotulo === alvo);
-      if (exato) return exato.el;
-    }
-    for (const alvo of alvos) {
-      const comeca = comRotulo.find((c) => !usados.has(c.el) && c.rotulo.startsWith(alvo));
-      if (comeca) return comeca.el;
-    }
-    return null;
-  }
-
-  // A descrição fica de fora de propósito: é escrita à mão.
-  const plano = [
-    { chave: "nome", alvos: ["nome do video", "nome da midia", "titulo", "nome"] },
-    { chave: "link", alvos: ["link do video", "link da midia", "link", "url"] },
-    { chave: "minutos", alvos: ["minutos", "minuto", "min"] },
-    { chave: "segundos", alvos: ["segundos", "segundo", "seg"] },
-    // As duas datas têm rótulos próprios. A de upload vem primeiro e fica com os rótulos
-    // genéricos ("data"), porque é a que um catálogo costuma pedir; a da coleção só é
-    // preenchida se o formulário tiver um campo que fale dela.
-    {
-      chave: "data",
-      alvos: [
-        "data de upload",
-        "data de publicacao",
-        "data do video",
-        "data de gravacao",
-        "enviado em",
-        "publicado em",
-        "data",
-      ],
-    },
-    {
-      chave: "dataColecao",
-      alvos: [
-        "data de inclusao",
-        "data na colecao",
-        "adicionado em",
-        "adicionado a colecao",
-        "incluido em",
-      ],
-    },
-  ];
-
-  // Um campo de data nativo (`type="date"`) só aceita o formato ISO — escrever "15/03/2024"
-  // nele não faz nada, silenciosamente. Num campo de texto vale o contrário: o usuário quer
-  // ver a data como escreve, em dd/mm/aaaa.
-  const ISO_DE = { data: "dataIso", dataColecao: "dataColecaoIso" };
-
-  function valorParaCampo(chave, valor, el) {
-    const iso = dados[ISO_DE[chave]];
-    if (!ISO_DE[chave]) return valor;
-    if (el.type === "date") return iso || "";
-    if (el.type === "datetime-local") return iso ? `${iso}T00:00` : "";
-    return valor;
-  }
-
-  const usados = new Set();
-  const preenchidos = [];
-  const faltaram = [];
-
-  for (const { chave, alvos } of plano) {
-    const valor = dados[chave];
-    if (valor === undefined || valor === null || valor === "") continue;
-    const el = achar(alvos, usados);
-    if (!el) {
-      faltaram.push(chave);
-      continue;
-    }
-    const escrita = valorParaCampo(chave, valor, el);
-    if (escrita === "") {
-      faltaram.push(chave);
-      continue;
-    }
-    usados.add(el);
-    escrever(el, escrita);
-    preenchidos.push(chave);
-  }
-
-  return { preenchidos, faltaram, camposVistos: comRotulo.map((c) => c.rotulo).filter(Boolean) };
-}
-
 // --- leitura da API do Canvas (sessão do usuário) -----------------------------
 function proximoLink(cabecalho) {
   if (!cabecalho) return null;
@@ -496,61 +341,6 @@ function listaFora(fora) {
     .join("")}</ul>`;
 }
 
-// Catalogar em outra plataforma: um clique preenche o formulário aberto na aba com os
-// dados que a extensão já tem do vídeo (nome, link e duração em minutos/segundos).
-function cartaoCatalogo() {
-  const videos = acervo().videos;
-  if (!videos.length) return "";
-
-  // Enquanto não houver autorização, o botão de preencher não tem o que fazer: o Chrome não
-  // deixa a extensão sequer ver em que página a aba está.
-  if (!estado.podeAgirEmSites) {
-    return `<details class="card" id="cat">
-      <summary><span>📋 Catalogar vídeos em outra plataforma</span></summary>
-      <p class="hint">Preenche o formulário de cadastro de outra plataforma com o
-      <b>nome</b>, o <b>link</b> e a <b>duração</b> do vídeo, em um clique.</p>
-      <p class="hint">Para isso o Chrome precisa autorizar a extensão a agir na página onde o
-      formulário está aberto. A autorização é pedida uma vez e pode ser revogada quando quiser,
-      em <code>chrome://extensions</code>.</p>
-      <button class="acao" id="autorizar-sites">Autorizar preenchimento de formulários</button>
-      <p class="erro" id="aviso-cat" hidden></p>
-    </details>`;
-  }
-
-  return `<details class="card" id="cat">
-    <summary><span>📋 Catalogar vídeos em outra plataforma</span></summary>
-    <p class="hint">Abra o formulário de cadastro na aba e clique em <b>Preencher</b> no vídeo
-    desejado. São preenchidos <b>nome</b>, <b>link</b>, <b>minutos</b>, <b>segundos</b> e a
-    <b>data de envio ao Studio</b> — a descrição e o autor ficam por sua conta.</p>
-    <p class="hint">Quando o vídeo foi <b>reaproveitado</b> (enviado ao Studio numa data e
-    posto nesta coleção em outra), as duas datas aparecem abaixo do título. Se o formulário
-    tiver um campo de inclusão na coleção, ele também é preenchido.</p>
-    ${
-      // A aba não informa a URL mesmo com a permissão concedida: é arquivo local ou página
-      // interna do Chrome. Avisar aqui evita o clique que falharia.
-      !estado.tabUrl && !estado.permiteArquivos
-        ? `<p class="erro">${esc(INSTRUCAO_ARQUIVO)}</p>`
-        : ""
-    }
-    <ul class="videos">${videos
-      .map((v) => {
-        const seg = Math.max(0, Math.round(Number(v.duration) || 0));
-        return `<li>
-          <div class="vlinha">
-            <div class="vt">${esc(v.title || "(sem título)")}</div>
-            <button class="tx cat" data-media="${esc(v.mediaId)}">Preencher</button>
-          </div>
-          <div class="vd">${Math.floor(seg / 60)}min ${seg % 60}s${
-            datasEmTexto(v) ? ` · ${esc(datasEmTexto(v))}` : ""
-          }${linkDoVideo(v) ? "" : " · sem link (abra o curso no Canvas)"}</div>
-        </li>`;
-      })
-      .join("")}</ul>
-    <p class="erro" id="aviso-cat" hidden></p>
-    <button class="acao secundaria" id="diag2" style="margin-top:8px">Salvar diagnóstico (.txt)</button>
-  </details>`;
-}
-
 function cartaoAnalise() {
   const a = estado.analise;
   if (!a) return "";
@@ -660,7 +450,7 @@ function cartaoAnalise() {
 }
 
 function desenhar() {
-  content.innerHTML = cartaoColecao() + cartaoAcoes() + cartaoAnalise() + cartaoCatalogo();
+  content.innerHTML = cartaoColecao() + cartaoAcoes() + cartaoAnalise();
 
   const copiar = document.getElementById("copiar");
   if (copiar) {
@@ -689,18 +479,12 @@ function desenhar() {
   const diag = document.getElementById("diag");
   if (diag) diag.addEventListener("click", salvarDiagnostico);
 
-  const diag2 = document.getElementById("diag2");
-  if (diag2) diag2.addEventListener("click", salvarDiagnostico);
-
-  const autorizar = document.getElementById("autorizar-sites");
-  if (autorizar) autorizar.addEventListener("click", aoClicarAutorizarSites);
-
   for (const b of content.querySelectorAll("button.tx")) {
-    b.addEventListener("click", () => {
-      if (b.classList.contains("cat")) return aoClicarPreencher(b.dataset.media, b);
-      if (b.dataset.modulo != null) return baixarLoteDoModulo(Number(b.dataset.modulo), b);
-      return baixarTranscricao(b.dataset.media, b);
-    });
+    b.addEventListener("click", () =>
+      b.dataset.modulo != null
+        ? baixarLoteDoModulo(Number(b.dataset.modulo), b)
+        : baixarTranscricao(b.dataset.media, b)
+    );
   }
 }
 
@@ -776,159 +560,6 @@ async function analisar() {
   desenhar();
 }
 
-// --- catalogar: preencher o formulário da outra plataforma --------------------
-function avisoCatalogo(texto) {
-  const caixa = document.getElementById("aviso-cat");
-  if (!caixa) return;
-  caixa.textContent = texto || "";
-  caixa.hidden = !texto;
-}
-
-// Sem permissão para um site, o Chrome nem entrega a URL da aba — e sem a URL não dá para
-// pedir permissão àquele site. Para sair dessa circularidade, a autorização é pedida uma vez,
-// explicitamente, pelo botão do cartão.
-const ORIGENS_CATALOGO = ["https://*/*", "http://*/*"];
-
-const temPermissaoDeSites = () =>
-  new Promise((r) =>
-    chrome.permissions.contains({ origins: ORIGENS_CATALOGO }, (ok) => {
-      void chrome.runtime.lastError;
-      r(!!ok);
-    })
-  );
-
-// Arquivos locais (file://) ficam fora de qualquer permissão de host: dependem de um
-// interruptor que só o usuário liga, em chrome://extensions. Saber disso de antemão é o que
-// permite explicar o problema em vez de mostrar "não consegui agir nesta aba".
-const permiteArquivosLocais = () =>
-  new Promise((r) => {
-    try {
-      chrome.extension.isAllowedFileSchemeAccess((ok) => {
-        void chrome.runtime.lastError;
-        r(!!ok);
-      });
-    } catch {
-      r(false);
-    }
-  });
-
-const INSTRUCAO_ARQUIVO =
-  'Esta aba parece ser um arquivo local (file://). Abra chrome://extensions, clique em "Detalhes" ' +
-  'nesta extensão e ligue "Permitir acesso a URLs de arquivo" — nenhuma permissão de site cobre ' +
-  "arquivos locais. Em páginas http/https isso não é necessário.";
-
-// Precisa sair DIRETO do clique, sem `await` antes: é exigência do Chrome para o diálogo.
-function aoClicarAutorizarSites() {
-  chrome.permissions.request({ origins: ORIGENS_CATALOGO }, (concedida) => {
-    void chrome.runtime.lastError;
-    estado.podeAgirEmSites = !!concedida;
-    if (!concedida) {
-      avisoCatalogo("Sem essa autorização não dá para preencher formulários em outras páginas.");
-      return;
-    }
-    carregar(); // relê a aba: a URL dela só fica visível depois da permissão
-  });
-}
-
-function aoClicarPreencher(mediaId, botao) {
-  if (estado.tabId == null) return;
-
-  // Arquivo local: nem a permissão de host resolve — o Chrome exige o interruptor manual.
-  if ((estado.tabUrl || "").startsWith("file:")) {
-    avisoCatalogo(
-      'Esta página é um arquivo local. Abra chrome://extensions, clique em "Detalhes" nesta ' +
-        'extensão e ligue "Permitir acesso a URLs de arquivo". Em páginas http/https não é ' +
-        "necessário."
-    );
-    return;
-  }
-
-  preencherCatalogo(mediaId, botao);
-}
-
-async function preencherCatalogo(mediaId, botao) {
-  const video = acervo().videos.find((v) => String(v.mediaId) === String(mediaId));
-  if (!video || estado.tabId == null) return;
-
-  const seg = Math.max(0, Math.round(Number(video.duration) || 0));
-  // Cada data vai nas duas formas: a que a pessoa lê e a que um campo `type="date"` exige.
-  // O ISO é montado dos componentes locais, não com `toISOString()`, que converteria para UTC
-  // e poderia recuar um dia.
-  const dois = (n) => String(n).padStart(2, "0");
-  const iso = (t) => (t ? `${t.getFullYear()}-${dois(t.getMonth() + 1)}-${dois(t.getDate())}` : "");
-  const upload = dataDeUpload(video);
-  const naColecao = dataNaColecao(video);
-  const dados = {
-    nome: video.title || "",
-    link: linkDoVideo(video) || "",
-    minutos: Math.floor(seg / 60),
-    segundos: seg % 60,
-    data: emDiaMesAno(upload) || "",
-    dataIso: iso(upload),
-    dataColecao: emDiaMesAno(naColecao) || "",
-    dataColecaoIso: iso(naColecao),
-  };
-
-  const rotulo = botao.textContent;
-  botao.disabled = true;
-  botao.textContent = "…";
-  avisoCatalogo("");
-
-  registrar(`catálogo: preencher "${dados.nome}" em ${estado.tabUrl || "(aba sem URL)"}`);
-
-  try {
-    // `allFrames` porque o formulário pode estar dentro de um iframe — nesse caso o frame
-    // principal não tem campo nenhum e a busca falharia sem nunca dizer por quê.
-    const saida = await chrome.scripting.executeScript({
-      target: { tabId: estado.tabId, allFrames: true },
-      func: sdvPreencherFormulario,
-      args: [dados],
-    });
-
-    // Vence o frame que preencheu mais campos; os outros normalmente não têm nenhum.
-    const resultados = (saida || []).map((s) => s && s.result).filter(Boolean);
-    const r =
-      resultados.sort((a, b) => b.preenchidos.length - a.preenchidos.length)[0] || null;
-    registrar(
-      `catálogo: ${resultados.length} frame(s) varridos; ` +
-        `preenchidos=[${(r && r.preenchidos.join(", ")) || "—"}] ` +
-        `faltaram=[${(r && r.faltaram.join(", ")) || "—"}] ` +
-        `rótulos vistos: ${(r && r.camposVistos.slice(0, 12).join(" | ")) || "nenhum"}`
-    );
-
-    if (!r || !r.preenchidos.length) {
-      botao.textContent = "⚠️";
-      // Os rótulos que a página tem ajudam a entender por que nada casou — sem isso o
-      // erro não diz o que fazer.
-      avisoCatalogo(
-        "Não achei os campos nesta página. Confira se o formulário está aberto nesta aba." +
-          (r && r.camposVistos.length
-            ? ` Campos vistos: ${r.camposVistos.slice(0, 8).join(", ")}.`
-            : "")
-      );
-    } else {
-      botao.textContent = `✅ ${r.preenchidos.length}`;
-      if (r.faltaram.length) avisoCatalogo(`Não achei o campo: ${r.faltaram.join(", ")}.`);
-    }
-  } catch (e) {
-    botao.textContent = "⚠️";
-    const msg = String((e && e.message) || e);
-    registrar(`catálogo: falha ao injetar — ${msg}`);
-    // Aba sem URL + permissão de sites concedida = quase sempre arquivo local ou página
-    // interna do Chrome, que nenhuma permissão alcança.
-    avisoCatalogo(
-      !estado.tabUrl && !estado.permiteArquivos
-        ? INSTRUCAO_ARQUIVO
-        : `Não consegui agir nesta aba: ${msg}`
-    );
-  }
-
-  setTimeout(() => {
-    botao.textContent = rotulo;
-    botao.disabled = false;
-  }, 2600);
-}
-
 // --- transcrição ("Baixar histórico" do player) --------------------------------
 // A rota da legenda não é a mesma em toda instância do Studio, então não a chutamos:
 // o net-hook aprende o formato na primeira vez que você usa "Baixar histórico" no
@@ -988,9 +619,6 @@ function textoDoDiagnostico() {
     "Setor de Vídeo — diagnóstico da transcrição",
     `Gerado em: ${new Date().toLocaleString("pt-BR")}`,
     `Canvas: ${estado.dominio || "—"} | curso: ${estado.courseId || "—"}`,
-    `Aba atual: ${estado.tabUrl || "(sem URL — falta permissão para este site)"}`,
-    `Pode agir em sites: ${estado.podeAgirEmSites ? "sim" : "NÃO"} | ` +
-      `arquivos locais: ${estado.permiteArquivos ? "sim" : "NÃO"}`,
     `Studio: ${estado.studioDomain || "—"} | coleção: ${a.collectionId || "—"}`,
     "",
     `Acervo conhecido: ${a.videos.length} vídeo(s)`,
@@ -1629,9 +1257,6 @@ async function carregar() {
   estado.studioDomain = null;
 
   const url = (aba && aba.url) || "";
-  estado.tabUrl = url; // vazia enquanto não houver permissão para o site desta aba
-  estado.podeAgirEmSites = await temPermissaoDeSites();
-  estado.permiteArquivos = await permiteArquivosLocais();
   const m = url.match(/^https:\/\/([^/]+)\/courses\/(\d+)/);
   if (m) {
     estado.dominio = m[1];
